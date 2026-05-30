@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-30
+
+### Changed
+- **⚠ Behaviour change — system-reminder delivery.** The periodic `<system-reminder>` nudge was previously appended onto the `content` of whatever unrelated tool (`read`, `bash`, `grep`, …) happened to run when it was due. That misattributed host policy text as tool output and **persisted a now-stale reminder into session history**, so it reappeared on every later turn even after task tools were used. It is now injected via the `context` hook as a **transient** `<system-reminder>`-tagged user message on the one request where it's due — not persisted, and not attached to any tool result. `tool_result` is now used solely for cadence tracking and never mutates tool output. The *cadence* (when a reminder fires) is unchanged; only the delivery mechanism and persistence differ. Cadence logic was extracted into a pure, unit-tested `src/reminder-cadence.ts`. (#19)
+
 ### Added
 - **Configurable widget display settings** — four new options in `/tasks` → Settings (persisted to `.pi/tasks-config.json`), all defaulting to the previous behaviour: (#22)
   - `sortOrder` (default `id`) — `id` (creation order), `status` (completed → in-progress → pending), `recent` / `oldest` (by last-updated time). Sort logic lives in `TaskStore.list(sortOrder)`.
@@ -169,6 +174,7 @@ Initial release — Claude Code-style task tracking and coordination for pi.
 - **Background process tracker** — output buffering (stdout + stderr), waiter notification, graceful stop with timeout escalation (SIGTERM → 5s → SIGKILL).
 - **78 unit tests** — task store CRUD, dependencies, warnings, file persistence; widget rendering, icons, spinners, token/duration formatting; process tracker lifecycle.
 
+[0.7.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.7.0
 [0.6.1]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.1
 [0.6.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.0
 [0.5.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.5.0
