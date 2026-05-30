@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-30
+
+### Fixed
+- **CI test failures on `webidl.util.markAsUncloneable is not a function`** — bumped the GitHub Actions `node-version` from `20` to `22`. Node 20's bundled `undici` lacks `webidl.util.markAsUncloneable`, which pi's event/RPC layer (exercised by `subagent-integration.test.ts`) requires. Matches the same fix in `@tintinweb/pi-subagents`.
+
 ## [0.6.0] - 2026-05-30
 
 ### Changed
@@ -157,6 +162,7 @@ Initial release — Claude Code-style task tracking and coordination for pi.
 - **Background process tracker** — output buffering (stdout + stderr), waiter notification, graceful stop with timeout escalation (SIGTERM → 5s → SIGKILL).
 - **78 unit tests** — task store CRUD, dependencies, warnings, file persistence; widget rendering, icons, spinners, token/duration formatting; process tracker lifecycle.
 
+[0.6.1]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.1
 [0.6.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.0
 [0.5.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.5.0
 [0.4.3]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.4.3
