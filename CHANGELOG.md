@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-24
+
+### Changed
+- **`TaskExecute` now offers a recovery path when subagents are unavailable.** When `@tintinweb/pi-subagents` isn't loaded (or its protocol version mismatches), the tool previously dead-ended with "ensure the extension is loaded". It now tells the agent it can run the work as plain Agent-tool spawns, with the explicit caveat that pi-tasks won't track those — status stays pending, cascade won't fire, and `TaskOutput` stays empty. Scoped to the unavailable branch so it doesn't conflict with the success-path guideline. Message only; no behaviour change. (#26)
+
 ## [0.7.0] - 2026-05-30
 
 ### Changed
@@ -174,6 +179,7 @@ Initial release — Claude Code-style task tracking and coordination for pi.
 - **Background process tracker** — output buffering (stdout + stderr), waiter notification, graceful stop with timeout escalation (SIGTERM → 5s → SIGKILL).
 - **78 unit tests** — task store CRUD, dependencies, warnings, file persistence; widget rendering, icons, spinners, token/duration formatting; process tracker lifecycle.
 
+[0.7.1]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.7.1
 [0.7.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.7.0
 [0.6.1]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.1
 [0.6.0]: https://github.com/tintinweb/pi-tasks/releases/tag/v0.6.0
