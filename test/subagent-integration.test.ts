@@ -3,6 +3,9 @@
  * auto-cascade, and widget agent ID display.
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 import { TaskStore } from "../src/task-store.js";
@@ -85,6 +88,26 @@ function mockCtx() {
     },
   };
 }
+
+describe("Session task rehydration", () => {
+  it("renders persisted tasks immediately after reload", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-tasks-reload-"));
+    const taskFile = join(directory, "tasks.json");
+    try {
+      new TaskStore(taskFile).create("Review the rerun", "Inspect final results");
+      process.env.PI_TASKS = taskFile;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      const ctx = mockCtx();
+
+      await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
+
+      expect(ctx.ui.setWidget).toHaveBeenCalled();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 // ---- Mock subagents extension (RPC responders) ----
 

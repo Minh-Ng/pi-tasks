@@ -377,8 +377,22 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // Grab UI context early — before_agent_start fires before any tool calls,
-  // so persisted tasks show up immediately on session start.
+  // Rehydrate before the first turn as well as after /reload. A reload creates a
+  // fresh extension instance, and before_agent_start does not fire until the user
+  // submits another prompt, which would otherwise leave persisted tasks hidden.
+  pi.on("session_start", async (event, ctx) => {
+    latestCtx = ctx;
+    widget.setUICtx(ctx.ui as UICtx);
+    upgradeStoreIfNeeded(ctx);
+    showPersistedTasks(event.reason === "reload" || event.reason === "resume");
+    if (pendingWarning) {
+      ctx.ui.notify(pendingWarning, "warning");
+      pendingWarning = undefined;
+    }
+  });
+
+  // Keep this fallback for hosts that initialize UI lazily and for the first
+  // agent turn on older pi versions.
   pi.on("before_agent_start", async (_event, ctx) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
