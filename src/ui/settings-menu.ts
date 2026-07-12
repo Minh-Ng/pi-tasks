@@ -8,7 +8,13 @@
 
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
-import { resolveTaskSort } from "../task-sort.js";
+import {
+  normalizeTaskSort,
+  resolveTaskSort,
+  SORT_SCHEMA_VERSION,
+  type TaskSortDirection,
+  type TaskSortRule,
+} from "../task-sort.js";
 import { saveTasksConfig, type TasksConfig } from "../tasks-config.js";
 import type { TaskStatus } from "../types.js";
 
@@ -38,26 +44,45 @@ function statusOrderLabel(order: readonly TaskStatus[]): string {
   )?.[0] ?? "completed → active → pending";
 }
 
-/** Materialize legacy values before applying one of the interactive sort settings. */
+/** Materialize any older format as versioned rules when an interactive sort setting changes. */
 export function updateTaskSortSetting(cfg: TasksConfig, id: string, newValue: string): boolean {
   if (id !== "sortBy" && id !== "sortDirection" && id !== "statusOrder") return false;
+  if (id === "sortBy" && newValue !== "created" && newValue !== "updated" && newValue !== "status") return false;
+  if (id === "sortDirection" && newValue !== "asc" && newValue !== "desc") return false;
   const selectedStatusOrder = id === "statusOrder" ? STATUS_ORDER_OPTIONS[newValue] : undefined;
   if (id === "statusOrder" && !selectedStatusOrder) return false;
 
+  const normalized = normalizeTaskSort(cfg);
   const resolved = resolveTaskSort(cfg);
-  cfg.sortBy = resolved.sortBy;
-  cfg.sortDirection = resolved.sortDirection;
-  cfg.statusOrder = [...resolved.statusOrder];
+  const direction: TaskSortDirection = id === "sortDirection"
+    ? newValue as TaskSortDirection
+    : resolved.sortDirection;
+  let rules: TaskSortRule[];
+  if (id === "sortDirection") {
+    rules = normalized.rules.map(rule => rule.field === "status"
+      ? { field: "status", order: [...rule.order] }
+      : { ...rule, direction });
+  } else if (id === "statusOrder") {
+    rules = [
+      { field: "status", order: [...selectedStatusOrder!] },
+      ...normalized.rules.filter(rule => rule.field !== "status").map(rule => ({ ...rule })),
+    ];
+  } else {
+    const sortBy = newValue === "created" ? "id" : newValue;
+    rules = sortBy === "status"
+      ? [{ field: "status", order: [...resolved.statusOrder] }, { field: "id", direction }]
+      : sortBy === "updated"
+        ? [{ field: "updatedAt", direction }, { field: "id", direction }]
+        : [{ field: "id", direction }];
+  }
+
+  cfg.sortSchemaVersion = SORT_SCHEMA_VERSION;
+  cfg.sortRules = rules;
+  delete cfg.sortBy;
+  delete cfg.sortDirection;
+  delete cfg.statusOrder;
   delete cfg.sortOrder;
   delete cfg.reverseSort;
-
-  if (id === "sortBy") {
-    cfg.sortBy = newValue === "created" ? "id" : newValue as TasksConfig["sortBy"];
-  } else if (id === "sortDirection") {
-    cfg.sortDirection = newValue as TasksConfig["sortDirection"];
-  } else {
-    cfg.statusOrder = [...selectedStatusOrder!];
-  }
   return true;
 }
 
@@ -128,9 +153,9 @@ export async function openSettingsMenu(
       },
       {
         id: "statusOrder",
-        label: "Widget status order",
+        label: "Sort by status order",
         description:
-          "Controls status-group order when sorting by status. Active means in-progress.",
+          "Selecting an order switches the widget to status sorting. Active means in-progress.",
         currentValue: statusOrderLabel(resolvedSort.statusOrder),
         values: Object.keys(STATUS_ORDER_OPTIONS),
       },

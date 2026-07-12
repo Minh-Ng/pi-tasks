@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_STATUS_ORDER,
+  type LegacyTaskSortOrder,
+  normalizeTaskSort,
   resolveTaskSort,
+  SORT_SCHEMA_VERSION,
   sortTasks,
   type TaskSortDirection,
 } from "../src/task-sort.js";
@@ -29,6 +32,29 @@ const STATUS_PERMUTATIONS: TaskStatus[][] = [
   ["pending", "completed", "in_progress"],
   ["pending", "in_progress", "completed"],
 ];
+
+function permutations<T>(items: T[]): T[][] {
+  if (items.length <= 1) return [items];
+  return items.flatMap((item, index) =>
+    permutations([...items.slice(0, index), ...items.slice(index + 1)]).map(rest => [item, ...rest]));
+}
+
+function legacySort(tasks: readonly Task[], sortOrder: LegacyTaskSortOrder, reverseSort: boolean): Task[] {
+  const statusRank = (status: TaskStatus) => status === "completed" ? 0 : status === "in_progress" ? 1 : 2;
+  const sorted = [...tasks].sort((a, b) => {
+    if (sortOrder === "status") {
+      return statusRank(a.status) - statusRank(b.status) || Number(a.id) - Number(b.id);
+    }
+    if (sortOrder === "recent") {
+      return b.updatedAt - a.updatedAt || Number(b.id) - Number(a.id);
+    }
+    if (sortOrder === "oldest") {
+      return a.updatedAt - b.updatedAt || Number(a.id) - Number(b.id);
+    }
+    return Number(a.id) - Number(b.id);
+  });
+  return reverseSort ? sorted.reverse() : sorted;
+}
 
 describe("task sorting", () => {
   it.each([
@@ -123,5 +149,138 @@ describe("task sorting", () => {
       sortBy: "id",
       sortDirection: "asc",
     });
+  });
+
+  it("supports custom multi-level declarative rules", () => {
+    const tasks = [
+      task("1", "pending", 10),
+      task("2", "in_progress", 20),
+      task("3", "pending", 30),
+      task("4", "pending", 30),
+    ];
+    const sorted = sortTasks(tasks, {
+      sortSchemaVersion: SORT_SCHEMA_VERSION,
+      sortRules: [
+        { field: "status", order: ["in_progress", "pending", "completed"] },
+        { field: "updatedAt", direction: "desc" },
+        { field: "id", direction: "asc" },
+      ],
+    });
+    expect(sorted.map(item => item.id)).toEqual(["2", "3", "4", "1"]);
+  });
+
+  it("handles malformed persisted task fields without bypassing deterministic tie-breakers", () => {
+    const malformedTimestamp = task("2", "pending", Number.NaN);
+    const validTimestamp = task("1", "pending", 10);
+    const laterTimestamp = task("3", "pending", 20);
+    const unknownStatus = { ...task("4", "pending", 5), status: "unknown" } as unknown as Task;
+    const rules = [
+      { field: "status", order: ["pending", "in_progress", "completed"] },
+      { field: "updatedAt", direction: "asc" },
+      { field: "id", direction: "asc" },
+    ];
+    const outputs = permutations([malformedTimestamp, unknownStatus, validTimestamp, laterTimestamp])
+      .map(input => sortTasks(input, { sortRules: rules }).map(item => item.id));
+    expect(outputs.every(output => JSON.stringify(output) === JSON.stringify(["1", "3", "2", "4"]))).toBe(true);
+  });
+
+  it("uses a total order for canonical, numerically unusual, and nonnumeric IDs", () => {
+    const tasks = [
+      task("1", "pending"),
+      task("01", "pending"),
+      task("0x10", "pending"),
+      task("0xg", "pending"),
+      task("é", "pending"),
+      task("e\u0301", "pending"),
+    ];
+    const outputs = permutations(tasks)
+      .map(input => sortTasks(input, { sortRules: [{ field: "id", direction: "asc" }] }).map(item => item.id));
+    expect(outputs.every(output => JSON.stringify(output) === JSON.stringify(outputs[0]))).toBe(true);
+    expect(new Set(outputs[0]).size).toBe(tasks.length);
+  });
+
+  it.each([
+    { sortRules: [] },
+    { sortRules: [{ field: "updatedAt", direction: "desc" }] },
+    { sortRules: [{ field: "id", direction: "sideways" }] },
+    { sortRules: [{ field: "unknown", direction: "asc" }, { field: "id", direction: "asc" }] },
+    { sortRules: [{ field: "id", direction: "asc" }, { field: "id", direction: "desc" }] },
+    { sortRules: [
+      { field: "status", order: ["pending", "pending", "completed"] },
+      { field: "id", direction: "asc" },
+    ] },
+  ])("rejects malformed declarative rules %#", config => {
+    const normalized = normalizeTaskSort(config);
+    expect(normalized.source).toBe("default");
+    expect(normalized.rules).toEqual([{ field: "id", direction: "asc" }]);
+    expect(normalized.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("uses deterministic schema precedence without mixing generations", () => {
+    const validRules = [{ field: "id", direction: "desc" }] as const;
+    expect(normalizeTaskSort({
+      sortSchemaVersion: SORT_SCHEMA_VERSION,
+      sortRules: validRules,
+      sortBy: "updated",
+      sortOrder: "recent",
+    }).source).toBe("rules");
+
+    const structured = normalizeTaskSort({
+      sortRules: [{ field: "updatedAt", direction: "desc" }], // invalid: no ID tiebreaker
+      sortBy: "status",
+      sortOrder: "recent",
+    });
+    expect(structured.source).toBe("structured");
+    expect(structured.rules[0].field).toBe("status");
+
+    const legacy = normalizeTaskSort({
+      sortRules: [],
+      sortOrder: "recent",
+    });
+    expect(legacy.source).toBe("legacy");
+    expect(legacy.rules[0]).toEqual({ field: "updatedAt", direction: "desc" });
+  });
+
+  it("does not interpret rules from an unsupported schema version", () => {
+    const normalized = normalizeTaskSort({
+      sortSchemaVersion: SORT_SCHEMA_VERSION + 1,
+      sortRules: [{ field: "id", direction: "desc" }],
+    });
+    expect(normalized.source).toBe("default");
+    expect(normalized.rules).toEqual([{ field: "id", direction: "asc" }]);
+    expect(normalized.warnings.join(" ")).toContain("unsupported");
+  });
+
+  it("normalization is idempotent and does not mutate configured rules", () => {
+    const configuredRules = [
+      { field: "status", order: ["pending", "in_progress", "completed"] },
+      { field: "id", direction: "desc" },
+    ] as const;
+    const first = normalizeTaskSort({ sortSchemaVersion: SORT_SCHEMA_VERSION, sortRules: configuredRules });
+    first.rules.reverse();
+    const second = normalizeTaskSort({ sortSchemaVersion: SORT_SCHEMA_VERSION, sortRules: configuredRules });
+    const third = normalizeTaskSort({ sortSchemaVersion: SORT_SCHEMA_VERSION, sortRules: second.rules });
+    expect(second.rules).toEqual(third.rules);
+    expect(configuredRules[0].field).toBe("status");
+  });
+
+  it("matches the old comparator exactly across varied task sets and every legacy combination", () => {
+    let seed = 0x12345678;
+    const random = () => {
+      seed = (1664525 * seed + 1013904223) >>> 0;
+      return seed;
+    };
+    const statuses: TaskStatus[] = ["pending", "in_progress", "completed"];
+    for (let sample = 0; sample < 100; sample++) {
+      const tasks = Array.from({ length: 25 }, (_, index) =>
+        task(String(index + 1), statuses[random() % statuses.length], random() % 7));
+      for (const sortOrder of ["id", "status", "recent", "oldest"] as LegacyTaskSortOrder[]) {
+        for (const reverseSort of [false, true]) {
+          const expected = legacySort(tasks, sortOrder, reverseSort).map(item => item.id);
+          const actual = sortTasks(tasks, { sortOrder, reverseSort }).map(item => item.id);
+          expect(actual).toEqual(expected);
+        }
+      }
+    }
   });
 });

@@ -59,13 +59,27 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
-| `sortBy` | `id` / `updated` / `status` | `id` | Sorts by creation ID, last-updated time, or configurable status groups |
-| `sortDirection` | `asc` / `desc` | `asc` | Controls ID/time order; with status sorting, controls IDs within each group |
-| `statusOrder` | permutation of `pending`, `in_progress`, `completed` | completed → in-progress → pending | Controls group order when `sortBy` is `status`; all six permutations are available in Settings |
+| Sort by | `created` / `updated` / `status` | `created` | Selects the primary ordering |
+| Sort direction | `asc` / `desc` | `asc` | Controls ID/time order and IDs within status groups |
+| Sort by status order | all six status permutations | completed → active → pending | Selects an order and switches to status sorting |
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortBy: status` to keep active work visible and fold completed tasks away |
+| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with status sorting to keep active work visible and fold completed tasks away |
 
+Advanced users can define a deterministic multi-level ordering directly in `.pi/tasks-config.json`:
+
+```json
+{
+  "sortSchemaVersion": 1,
+  "sortRules": [
+    { "field": "status", "order": ["in_progress", "pending", "completed"] },
+    { "field": "updatedAt", "direction": "desc" },
+    { "field": "id", "direction": "asc" }
+  ]
+}
+```
+
+Rules are applied in sequence and must end with an ID rule for deterministic tie-breaking.
 
 ## Tools
 
@@ -216,7 +230,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortBy` / `sortDirection` / `statusOrder` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings)) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 
