@@ -50,6 +50,49 @@ describe("TaskStore (in-memory)", () => {
     expect(tasks.map(t => t.id)).toEqual(["1", "2", "3"]);
   });
 
+  it("supports descending order and returns defensive array copies", () => {
+    for (let id = 1; id <= 3; id++) store.create(`Task ${id}`, "Desc");
+
+    const first = store.list("id", "descending");
+    first.pop();
+
+    expect(store.list("id", "descending").map(task => task.id)).toEqual(["3", "2", "1"]);
+    expect(store.list("id", "ascending").map(task => task.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("reuses cached ordering while sort keys are unchanged", () => {
+    for (let id = 1; id <= 3; id++) store.create(`Task ${id}`, "Desc");
+    const sortSpy = vi.spyOn(Array.prototype, "sort");
+    try {
+      store.list("status", "descending");
+      const callsAfterFirstList = sortSpy.mock.calls.length;
+      store.list("status", "descending");
+      expect(sortSpy).toHaveBeenCalledTimes(callsAfterFirstList);
+    } finally {
+      sortSpy.mockRestore();
+    }
+  });
+
+  it("invalidates cached ordering after a relevant mutation", () => {
+    store.create("First", "Desc");
+    store.create("Second", "Desc");
+    expect(store.list("status").map(task => task.id)).toEqual(["1", "2"]);
+
+    store.update("2", { status: "completed" });
+
+    expect(store.list("status").map(task => task.id)).toEqual(["2", "1"]);
+  });
+
+  it("detects sort-key changes made through returned task references", () => {
+    store.create("First", "Desc");
+    store.create("Second", "Desc");
+    const tasks = store.list("status");
+
+    tasks[1].status = "completed";
+
+    expect(store.list("status").map(task => task.id)).toEqual(["2", "1"]);
+  });
+
   it("lists tasks sorted by status when sortOrder is 'status'", () => {
     store.create("Pending", "Desc");           // #1
     store.create("Completed", "Desc");         // #2
@@ -430,6 +473,18 @@ describe("TaskStore (file-backed)", () => {
     const store2 = new TaskStore(testListId);
     const t3 = store2.create("Task 3", "Desc");
     expect(t3.id).toBe("3");
+  });
+
+  it("invalidates cached ordering after an external file update", () => {
+    const store1 = new TaskStore(testListId);
+    store1.create("First", "Desc");
+    store1.create("Second", "Desc");
+    expect(store1.list("status").map(task => task.id)).toEqual(["1", "2"]);
+
+    const store2 = new TaskStore(testListId);
+    store2.update("2", { status: "completed" });
+
+    expect(store1.list("status").map(task => task.id)).toEqual(["2", "1"]);
   });
 });
 

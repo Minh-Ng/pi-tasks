@@ -28,6 +28,8 @@ function sortByOldest(a: Task, b: Task): number {
 }
 
 const SORT_FNS = { id: sortById, status: sortByStatus, recent: sortByRecent, oldest: sortByOldest };
+export type TaskSortOrder = keyof typeof SORT_FNS;
+export type TaskSortDirection = "ascending" | "descending";
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
@@ -76,6 +78,8 @@ export class TaskStore {
   // In-memory state (always kept in sync)
   private nextId = 1;
   private tasks = new Map<string, Task>();
+  private fileSnapshot: string | undefined;
+  private sortedCache = new Map<string, { signature: string; tasks: Task[] }>();
 
   constructor(listIdOrPath?: string) {
     if (!listIdOrPath) return;
@@ -87,17 +91,25 @@ export class TaskStore {
     this.load();
   }
 
+  private invalidateSortedCache(): void {
+    this.sortedCache.clear();
+  }
+
   /** Read store from disk (file-backed mode only). */
   private load(): void {
     if (!this.filePath) return;
     if (!existsSync(this.filePath)) return;
     try {
-      const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      const snapshot = readFileSync(this.filePath, "utf-8");
+      if (snapshot === this.fileSnapshot) return;
+      const data: TaskStoreData = JSON.parse(snapshot);
       this.nextId = data.nextId;
       this.tasks.clear();
       for (const t of data.tasks) {
         this.tasks.set(t.id, t);
       }
+      this.fileSnapshot = snapshot;
+      this.invalidateSortedCache();
     } catch { /* corrupt file — start fresh */ }
   }
 
@@ -108,18 +120,25 @@ export class TaskStore {
       nextId: this.nextId,
       tasks: Array.from(this.tasks.values()),
     };
+    const snapshot = JSON.stringify(data, null, 2);
     const tmpPath = this.filePath + ".tmp";
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+    writeFileSync(tmpPath, snapshot);
     renameSync(tmpPath, this.filePath);
+    this.fileSnapshot = snapshot;
   }
 
   /** Execute a mutation with file locking (if file-backed). */
   private withLock<T>(fn: () => T): T {
-    if (!this.lockPath) return fn();
+    if (!this.lockPath) {
+      const result = fn();
+      this.invalidateSortedCache();
+      return result;
+    }
     acquireLock(this.lockPath);
     try {
       this.load(); // Re-read latest state
       const result = fn();
+      this.invalidateSortedCache();
       this.save();
       return result;
     } finally {
@@ -153,10 +172,24 @@ export class TaskStore {
     return this.tasks.get(id);
   }
 
-  /** List all tasks, sorted by the given order (defaults to ID ascending). */
-  list(sortOrder: "id" | "status" | "recent" | "oldest" = "id"): Task[] {
+  /** List tasks in the requested order, re-sorting only when its sort keys change. */
+  list(sortOrder: TaskSortOrder = "id", sortDirection: TaskSortDirection = "ascending"): Task[] {
     if (this.filePath) this.load();
-    return Array.from(this.tasks.values()).sort(SORT_FNS[sortOrder]);
+    const cacheKey = `${sortOrder}:${sortDirection}`;
+    const signature = JSON.stringify(Array.from(this.tasks.values(), task =>
+      sortOrder === "status"
+        ? [task.id, task.status]
+        : sortOrder === "recent" || sortOrder === "oldest"
+          ? [task.id, task.updatedAt]
+          : [task.id]));
+    let cached = this.sortedCache.get(cacheKey);
+    if (!cached || cached.signature !== signature) {
+      const tasks = Array.from(this.tasks.values()).sort(SORT_FNS[sortOrder]);
+      if (sortDirection === "descending") tasks.reverse();
+      cached = { signature, tasks };
+      this.sortedCache.set(cacheKey, cached);
+    }
+    return [...cached.tasks];
   }
 
   update(id: string, fields: {

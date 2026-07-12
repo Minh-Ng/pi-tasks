@@ -137,8 +137,8 @@ export class TaskWidget {
   /** Build widget lines from current live state. Called from the render callback. */
   private renderWidget(tui: any, theme: Theme): string[] {
     const sortOrder = this.config.sortOrder ?? "id";
-    const tasks = this.store.list(sortOrder);
-    if (this.config.sortDirection === "descending") tasks.reverse();
+    const sortDirection = this.config.sortDirection ?? "ascending";
+    const tasks = this.store.list(sortOrder, sortDirection);
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 
@@ -235,7 +235,9 @@ export class TaskWidget {
   /** Force an immediate widget update. */
   update() {
     if (!this.uiCtx) return;
-    const tasks = this.store.list();
+    const sortOrder = this.config.sortOrder ?? "id";
+    const sortDirection = this.config.sortDirection ?? "ascending";
+    const tasks = this.store.list(sortOrder, sortDirection);
 
     // Transition: visible → hidden
     if (tasks.length === 0) {
