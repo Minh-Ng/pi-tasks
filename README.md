@@ -60,7 +60,7 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
 | `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| Sort direction (`reverseSort`) | ascending / descending | ascending | Descending reverses the selected order. With `status`, open tasks appear before completed tasks |
+| `reverseSort` | `true` / `false` | `false` | Reverses the selected sort order. With `status`, open tasks appear before completed tasks |
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
