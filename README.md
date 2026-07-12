@@ -59,27 +59,13 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
-| Sort by | `created` / `updated` / `status` | `created` | Selects the primary ordering |
-| Sort direction | `asc` / `desc` | `asc` | Controls ID/time order and IDs within status groups |
-| Sort by status order | all six status permutations | completed → active → pending | Selects an order and switches to status sorting |
+| `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
+| Sort direction (`reverseSort`) | ascending / descending | ascending | Descending reverses the selected order. With `status`, open tasks appear before completed tasks |
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with status sorting to keep active work visible and fold completed tasks away |
+| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
 
-Advanced users can define a deterministic multi-level ordering directly in `.pi/tasks-config.json`:
-
-```json
-{
-  "sortSchemaVersion": 1,
-  "sortRules": [
-    { "field": "status", "order": ["in_progress", "pending", "completed"] },
-    { "field": "updatedAt", "direction": "desc" },
-    { "field": "id", "direction": "asc" }
-  ]
-}
-```
-
-Rules are applied in sequence and must end with an ID rule for deterministic tie-breaking.
+> The default `status` direction is completed-first. Choose descending to show pending and in-progress tasks first.
 
 ## Tools
 
@@ -230,7 +216,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings)) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `reverseSort` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 

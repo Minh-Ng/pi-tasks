@@ -1,10 +1,7 @@
 // <cwd>/.pi/tasks-config.json — persists extension settings across sessions
 
-import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { TaskSortDirection, TaskSortKey, TaskSortRule } from "./task-sort.js";
-import type { TaskStatus } from "./types.js";
 
 export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
@@ -12,14 +9,8 @@ export interface TasksConfig {
   autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
-  sortSchemaVersion?: number;
-  sortRules?: TaskSortRule[];
-  sortBy?: TaskSortKey;                                  // compatibility
-  sortDirection?: TaskSortDirection;                     // compatibility
-  statusOrder?: TaskStatus[];                            // compatibility
-  /** Legacy settings retained for existing configuration files. */
-  sortOrder?: "id" | "status" | "recent" | "oldest";
-  reverseSort?: boolean;
+  sortOrder?: "id" | "status" | "recent" | "oldest";  // default: "id"
+  reverseSort?: boolean;                                 // default: false
   hiddenAt?: "top" | "bottom";                         // default: "bottom"
 }
 
@@ -31,17 +22,7 @@ export function loadTasksConfig(): TasksConfig {
   } catch { return {}; }
 }
 
-export function writeTasksConfig(path: string, config: TasksConfig): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmpPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmpPath, JSON.stringify(config, null, 2));
-    renameSync(tmpPath, path);
-  } finally {
-    try { unlinkSync(tmpPath); } catch { /* already renamed or never written */ }
-  }
-}
-
 export function saveTasksConfig(config: TasksConfig): void {
-  writeTasksConfig(CONFIG_PATH, config);
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 }

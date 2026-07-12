@@ -8,15 +8,7 @@
 
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
-import {
-  normalizeTaskSort,
-  resolveTaskSort,
-  SORT_SCHEMA_VERSION,
-  type TaskSortDirection,
-  type TaskSortRule,
-} from "../task-sort.js";
 import { saveTasksConfig, type TasksConfig } from "../tasks-config.js";
-import type { TaskStatus } from "../types.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -29,63 +21,6 @@ export type SettingsUI = {
 
 // ── Settings panel ──────────────────────────────────────────────────────────
 
-const STATUS_ORDER_OPTIONS: Record<string, TaskStatus[]> = {
-  "completed → active → pending": ["completed", "in_progress", "pending"],
-  "completed → pending → active": ["completed", "pending", "in_progress"],
-  "active → completed → pending": ["in_progress", "completed", "pending"],
-  "active → pending → completed": ["in_progress", "pending", "completed"],
-  "pending → completed → active": ["pending", "completed", "in_progress"],
-  "pending → active → completed": ["pending", "in_progress", "completed"],
-};
-
-function statusOrderLabel(order: readonly TaskStatus[]): string {
-  return Object.entries(STATUS_ORDER_OPTIONS).find(([, candidate]) =>
-    candidate.every((status, index) => status === order[index])
-  )?.[0] ?? "completed → active → pending";
-}
-
-/** Materialize any older format as versioned rules when an interactive sort setting changes. */
-export function updateTaskSortSetting(cfg: TasksConfig, id: string, newValue: string): boolean {
-  if (id !== "sortBy" && id !== "sortDirection" && id !== "statusOrder") return false;
-  if (id === "sortBy" && newValue !== "created" && newValue !== "updated" && newValue !== "status") return false;
-  if (id === "sortDirection" && newValue !== "asc" && newValue !== "desc") return false;
-  const selectedStatusOrder = id === "statusOrder" ? STATUS_ORDER_OPTIONS[newValue] : undefined;
-  if (id === "statusOrder" && !selectedStatusOrder) return false;
-
-  const normalized = normalizeTaskSort(cfg);
-  const resolved = resolveTaskSort(cfg);
-  const direction: TaskSortDirection = id === "sortDirection"
-    ? newValue as TaskSortDirection
-    : resolved.sortDirection;
-  let rules: TaskSortRule[];
-  if (id === "sortDirection") {
-    rules = normalized.rules.map(rule => rule.field === "status"
-      ? { field: "status", order: [...rule.order] }
-      : { ...rule, direction });
-  } else if (id === "statusOrder") {
-    rules = [
-      { field: "status", order: [...selectedStatusOrder!] },
-      ...normalized.rules.filter(rule => rule.field !== "status").map(rule => ({ ...rule })),
-    ];
-  } else {
-    const sortBy = newValue === "created" ? "id" : newValue;
-    rules = sortBy === "status"
-      ? [{ field: "status", order: [...resolved.statusOrder] }, { field: "id", direction }]
-      : sortBy === "updated"
-        ? [{ field: "updatedAt", direction }, { field: "id", direction }]
-        : [{ field: "id", direction }];
-  }
-
-  cfg.sortSchemaVersion = SORT_SCHEMA_VERSION;
-  cfg.sortRules = rules;
-  delete cfg.sortBy;
-  delete cfg.sortDirection;
-  delete cfg.statusOrder;
-  delete cfg.sortOrder;
-  delete cfg.reverseSort;
-  return true;
-}
-
 export async function openSettingsMenu(
   ui: SettingsUI,
   cfg: TasksConfig,
@@ -93,7 +28,6 @@ export async function openSettingsMenu(
   clearDelayTurns: number,
 ): Promise<void> {
   await ui.custom((_tui, theme, _kb, done) => {
-    const resolvedSort = resolveTaskSort(cfg);
     const items: SettingItem[] = [
       {
         id: "taskScope",
@@ -134,30 +68,22 @@ export async function openSettingsMenu(
         values: ["5", "10", "15", "20", "30", "50", "100"],
       },
       {
-        id: "sortBy",
-        label: "Widget sort by",
+        id: "sortOrder",
+        label: "Widget sort order",
         description:
-          '"created" uses task IDs, "updated" uses the last change time, ' +
-          'and "status" groups tasks using the configured status order.',
-        currentValue: resolvedSort.sortBy === "id" ? "created" : resolvedSort.sortBy,
-        values: ["created", "updated", "status"],
+          '"status" groups by completed → in-progress → pending. ' +
+          '"id" sorts by creation order.',
+        currentValue: cfg.sortOrder ?? "id",
+        values: ["id", "status", "recent", "oldest"],
       },
       {
-        id: "sortDirection",
+        id: "reverseSort",
         label: "Widget sort direction",
         description:
-          "Ascending means oldest/lowest ID first; descending means newest/highest ID first. " +
-          "With status sorting, this controls IDs within each group.",
-        currentValue: resolvedSort.sortDirection,
-        values: ["asc", "desc"],
-      },
-      {
-        id: "statusOrder",
-        label: "Sort by status order",
-        description:
-          "Selecting an order switches the widget to status sorting. Active means in-progress.",
-        currentValue: statusOrderLabel(resolvedSort.statusOrder),
-        values: Object.keys(STATUS_ORDER_OPTIONS),
+          "Ascending uses the selected sort order; descending reverses it. " +
+          'With "status", descending puts open tasks before completed tasks.',
+        currentValue: (cfg.reverseSort ?? false) ? "descending" : "ascending",
+        values: ["ascending", "descending"],
       },
       {
         id: "hiddenAt",
@@ -206,7 +132,12 @@ export async function openSettingsMenu(
           cfg.maxVisible = Number(newValue);
           saveTasksConfig(cfg);
         }
-        if (updateTaskSortSetting(cfg, id, newValue)) {
+        if (id === "sortOrder") {
+          cfg.sortOrder = newValue as TasksConfig["sortOrder"];
+          saveTasksConfig(cfg);
+        }
+        if (id === "reverseSort") {
+          cfg.reverseSort = newValue === "descending";
           saveTasksConfig(cfg);
         }
         if (id === "hiddenAt") {

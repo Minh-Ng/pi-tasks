@@ -28,7 +28,6 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { normalizeTaskSort } from "./task-sort.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
@@ -63,16 +62,8 @@ The task tools haven't been used recently. If you're working on tasks that would
 export default function (pi: ExtensionAPI) {
   // Initialize store and config
   const cfg = loadTasksConfig();
-  const sortConfigWarnings = normalizeTaskSort(cfg).warnings;
-  let sortConfigWarningShown = false;
   const piTasks = process.env.PI_TASKS;
   const taskScope = cfg.taskScope ?? "session";
-
-  function showSortConfigWarning(ctx: ExtensionContext) {
-    if (sortConfigWarningShown || sortConfigWarnings.length === 0) return;
-    sortConfigWarningShown = true;
-    ctx.ui.notify(`Invalid task sorting config; using a safe fallback: ${sortConfigWarnings.join("; ")}`, "warning");
-  }
 
   /** Resolve the task store path from env/config (without session ID). */
   function resolveStorePath(sessionId?: string): string | undefined {
@@ -393,7 +384,6 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
     showPersistedTasks();
-    showSortConfigWarning(ctx);
     if (pendingWarning) {
       ctx.ui.notify(pendingWarning, "warning");
       pendingWarning = undefined;
