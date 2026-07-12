@@ -85,6 +85,8 @@ export class TaskWidget {
   private metrics = new Map<string, TaskMetrics>();
   /** Cached TUI instance for requestRender() calls. */
   private tui: any | undefined;
+  /** Sorted task snapshot, refreshed only when update() is explicitly called. */
+  private sortedTasks: Task[] = [];
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
 
@@ -95,6 +97,7 @@ export class TaskWidget {
 
   setStore(store: TaskStore) {
     this.store = store;
+    this.sortedTasks = [];
   }
 
   setUICtx(ctx: UICtx) {
@@ -127,18 +130,19 @@ export class TaskWidget {
     }
   }
 
-  /** Ensure the widget update timer is running. */
+  /** Ensure the animation timer is running without re-reading or re-sorting tasks. */
   ensureTimer() {
     if (!this.widgetInterval) {
-      this.widgetInterval = setInterval(() => this.update(), 150);
+      this.widgetInterval = setInterval(() => {
+        this.widgetFrame++;
+        this.tui?.requestRender();
+      }, 150);
     }
   }
 
-  /** Build widget lines from current live state. Called from the render callback. */
+  /** Build widget lines from the latest task snapshot. Called from the render callback. */
   private renderWidget(tui: any, theme: Theme): string[] {
-    const sortOrder = this.config.sortOrder ?? "id";
-    const tasks = this.store.list(sortOrder);
-    if (this.config.sortDirection === "descending") tasks.reverse();
+    const tasks = this.sortedTasks;
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 
@@ -235,7 +239,10 @@ export class TaskWidget {
   /** Force an immediate widget update. */
   update() {
     if (!this.uiCtx) return;
-    const tasks = this.store.list();
+    const sortOrder = this.config.sortOrder ?? "id";
+    const tasks = this.store.list(sortOrder);
+    if (this.config.sortDirection === "descending") tasks.reverse();
+    this.sortedTasks = tasks;
 
     // Transition: visible → hidden
     if (tasks.length === 0) {
@@ -293,5 +300,6 @@ export class TaskWidget {
     }
     this.widgetRegistered = false;
     this.tui = undefined;
+    this.sortedTasks = [];
   }
 }

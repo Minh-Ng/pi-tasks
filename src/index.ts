@@ -1110,7 +1110,7 @@ Set up task dependencies:
       };
 
       const settingsMenu = (): Promise<void> =>
-        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY);
+        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY, () => widget.update());
 
       const createTask = async (): Promise<void> => {
         const subject = await ui.input("Task subject");

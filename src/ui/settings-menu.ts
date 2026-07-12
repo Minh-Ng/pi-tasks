@@ -26,6 +26,7 @@ export async function openSettingsMenu(
   cfg: TasksConfig,
   onBack: () => Promise<void>,
   clearDelayTurns: number,
+  onConfigChange?: () => void,
 ): Promise<void> {
   await ui.custom((_tui, theme, _kb, done) => {
     const items: SettingItem[] = [
@@ -144,6 +145,7 @@ export async function openSettingsMenu(
           cfg.hiddenAt = newValue as "top" | "bottom";
           saveTasksConfig(cfg);
         }
+        onConfigChange?.();
       },
       /* onCancel */ () => done(undefined),
     );
