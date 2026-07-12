@@ -60,11 +60,12 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
 | `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
+| `reverseSort` | `true` / `false` | `false` | Reverses the selected sort order. With `status`, open tasks appear before completed tasks |
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
 
-> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order.
+> Note: the widget's default `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`). Enable `reverseSort` to show pending and in-progress tasks first instead.
 
 ## Tools
 
@@ -215,7 +216,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `reverseSort` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 

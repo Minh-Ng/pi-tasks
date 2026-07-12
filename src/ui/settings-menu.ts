@@ -77,6 +77,15 @@ export async function openSettingsMenu(
         values: ["id", "status", "recent", "oldest"],
       },
       {
+        id: "reverseSort",
+        label: "Reverse widget sort order",
+        description:
+          "Reverses the selected sort order. " +
+          'With "status", this puts pending and in-progress tasks before completed tasks.',
+        currentValue: (cfg.reverseSort ?? false) ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
         id: "hiddenAt",
         label: "Hidden tasks position",
         description:
@@ -125,6 +134,10 @@ export async function openSettingsMenu(
         }
         if (id === "sortOrder") {
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
+          saveTasksConfig(cfg);
+        }
+        if (id === "reverseSort") {
+          cfg.reverseSort = newValue === "on";
           saveTasksConfig(cfg);
         }
         if (id === "hiddenAt") {

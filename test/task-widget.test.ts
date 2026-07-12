@@ -271,6 +271,23 @@ describe("TaskWidget", () => {
     expect(lines[3]).toContain("Pending task");
   });
 
+  it("reverses status order so open tasks appear first", () => {
+    widget = new TaskWidget(store, { sortOrder: "status", reverseSort: true });
+    widget.setUICtx(ui.ctx);
+    store.create("Pending task", "Desc");           // #1
+    store.create("Completed task", "Desc");         // #2
+    store.create("In progress task", "Desc");       // #3
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Reversed status order: pending, in_progress, completed
+    expect(lines[1]).toContain("Pending task");
+    expect(lines[2]).toContain("In progress task");
+    expect(lines[3]).toContain("Completed task");
+  });
+
   it("defaults to ID order when sortOrder is unset", () => {
     store.create("Pending task", "Desc");           // #1
     store.create("Completed task", "Desc");         // #2
