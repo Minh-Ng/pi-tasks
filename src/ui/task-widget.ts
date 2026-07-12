@@ -9,6 +9,7 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { sortTasks } from "../task-sort.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 
@@ -136,9 +137,7 @@ export class TaskWidget {
 
   /** Build widget lines from current live state. Called from the render callback. */
   private renderWidget(tui: any, theme: Theme): string[] {
-    const sortOrder = this.config.sortOrder ?? "id";
-    const tasks = this.store.list(sortOrder);
-    if (this.config.reverseSort ?? false) tasks.reverse();
+    const tasks = sortTasks(this.store.list(), this.config);
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 

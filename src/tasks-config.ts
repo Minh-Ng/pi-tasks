@@ -2,6 +2,8 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { TaskSortDirection, TaskSortKey } from "./task-sort.js";
+import type { TaskStatus } from "./types.js";
 
 export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
@@ -9,8 +11,12 @@ export interface TasksConfig {
   autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
-  sortOrder?: "id" | "status" | "recent" | "oldest";  // default: "id"
-  reverseSort?: boolean;                                 // default: false
+  sortBy?: TaskSortKey;                                  // default: "id"
+  sortDirection?: TaskSortDirection;                     // default: "asc"
+  statusOrder?: TaskStatus[];                            // default: completed → in_progress → pending
+  /** Legacy settings retained for existing configuration files. */
+  sortOrder?: "id" | "status" | "recent" | "oldest";
+  reverseSort?: boolean;
   hiddenAt?: "top" | "bottom";                         // default: "bottom"
 }
 

@@ -59,13 +59,14 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
-| `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| `reverseSort` | `true` / `false` | `false` | Reverses the selected sort order. With `status`, open tasks appear before completed tasks |
+| `sortBy` | `id` / `updated` / `status` | `id` | Sorts by creation ID, last-updated time, or configurable status groups |
+| `sortDirection` | `asc` / `desc` | `asc` | Controls ID/time order; with status sorting, controls IDs within each group |
+| `statusOrder` | permutation of `pending`, `in_progress`, `completed` | completed → in-progress → pending | Controls group order when `sortBy` is `status`; all six permutations are available in Settings |
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
+| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortBy: status` to keep active work visible and fold completed tasks away |
 
-> Note: the widget's default `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`). Enable `reverseSort` to show pending and in-progress tasks first instead.
+> Existing `sortOrder` values (`id`, `status`, `recent`, and `oldest`) and `reverseSort` remain supported. Changing any new sorting setting migrates the full configuration to `sortBy`, `sortDirection`, and `statusOrder`.
 
 ## Tools
 
@@ -216,7 +217,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `reverseSort` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortBy` / `sortDirection` / `statusOrder` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 
