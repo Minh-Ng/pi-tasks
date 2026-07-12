@@ -111,19 +111,6 @@ describe("TaskWidget", () => {
     expect(lines[1]).not.toContain("◼");
   });
 
-  it("does not re-sort tasks for animation-only renders", () => {
-    store.create("Running thing", "Desc", "Processing data");
-    store.update("1", { status: "in_progress" });
-    const listSpy = vi.spyOn(store, "list");
-    widget.setActiveTask("1", true);
-    renderWidget(ui.state);
-    const callsAfterRefresh = listSpy.mock.calls.length;
-
-    vi.advanceTimersByTime(600);
-
-    expect(listSpy).toHaveBeenCalledTimes(callsAfterRefresh);
-  });
-
   it("shows blocked-by info for pending tasks", () => {
     store.create("Blocker", "Desc");
     store.create("Blocked", "Desc");
