@@ -90,7 +90,31 @@ function mockCtx() {
 }
 
 describe("Session task rehydration", () => {
-  it("renders persisted tasks immediately after reload", async () => {
+  it("renders default session-scoped tasks immediately after reload", async () => {
+    const sessionId = `reload-${process.pid}-${Date.now()}`;
+    const taskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    try {
+      new TaskStore(taskFile).create("Review the rerun", "Inspect final results");
+      delete process.env.PI_TASKS;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      const ctx = {
+        ...mockCtx(),
+        sessionManager: { getSessionId: vi.fn(() => sessionId) },
+      };
+
+      await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
+
+      expect(ctx.sessionManager.getSessionId).toHaveBeenCalledOnce();
+      expect(ctx.ui.setWidget).toHaveBeenCalledWith("tasks", expect.any(Function), {
+        placement: "aboveEditor",
+      });
+    } finally {
+      rmSync(taskFile, { force: true });
+    }
+  });
+
+  it("renders tasks from a PI_TASKS path override after reload", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-tasks-reload-"));
     const taskFile = join(directory, "tasks.json");
     try {
@@ -102,7 +126,9 @@ describe("Session task rehydration", () => {
 
       await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
 
-      expect(ctx.ui.setWidget).toHaveBeenCalled();
+      expect(ctx.ui.setWidget).toHaveBeenCalledWith("tasks", expect.any(Function), {
+        placement: "aboveEditor",
+      });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
