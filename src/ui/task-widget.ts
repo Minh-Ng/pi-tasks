@@ -138,7 +138,7 @@ export class TaskWidget {
   private renderWidget(tui: any, theme: Theme): string[] {
     const sortOrder = this.config.sortOrder ?? "id";
     const tasks = this.store.list(sortOrder);
-    if (this.config.reverseSort ?? false) tasks.reverse();
+    if (this.config.sortDirection === "descending") tasks.reverse();
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 

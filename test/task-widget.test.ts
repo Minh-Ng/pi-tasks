@@ -272,7 +272,7 @@ describe("TaskWidget", () => {
   });
 
   it("reverses status order so open tasks appear first", () => {
-    widget = new TaskWidget(store, { sortOrder: "status", reverseSort: true });
+    widget = new TaskWidget(store, { sortOrder: "status", sortDirection: "descending" });
     widget.setUICtx(ui.ctx);
     store.create("Pending task", "Desc");           // #1
     store.create("Completed task", "Desc");         // #2
@@ -289,7 +289,7 @@ describe("TaskWidget", () => {
   });
 
   it("reverses creation order when descending is selected", () => {
-    widget = new TaskWidget(store, { sortOrder: "id", reverseSort: true });
+    widget = new TaskWidget(store, { sortOrder: "id", sortDirection: "descending" });
     widget.setUICtx(ui.ctx);
     for (let id = 1; id <= 3; id++) store.create(`Task ${id}`, "Desc");
     widget.update();
@@ -303,7 +303,7 @@ describe("TaskWidget", () => {
     store.create("Older", "Desc");
     vi.setSystemTime(200);
     store.create("Newer", "Desc");
-    widget = new TaskWidget(store, { sortOrder: "recent", reverseSort: true });
+    widget = new TaskWidget(store, { sortOrder: "recent", sortDirection: "descending" });
     widget.setUICtx(ui.ctx);
     widget.update();
 
@@ -314,7 +314,7 @@ describe("TaskWidget", () => {
 
   it("does not mutate store order when rendering descending", () => {
     for (let id = 1; id <= 3; id++) store.create(`Task ${id}`, "Desc");
-    widget = new TaskWidget(store, { sortOrder: "id", reverseSort: true });
+    widget = new TaskWidget(store, { sortOrder: "id", sortDirection: "descending" });
     widget.setUICtx(ui.ctx);
     widget.update();
     expect(renderWidget(ui.state).slice(1).map(line => line.match(/#(\d+)/)?.[1])).toEqual(["3", "2", "1"]);

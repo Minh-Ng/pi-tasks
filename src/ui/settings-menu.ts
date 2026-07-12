@@ -77,12 +77,12 @@ export async function openSettingsMenu(
         values: ["id", "status", "recent", "oldest"],
       },
       {
-        id: "reverseSort",
+        id: "sortDirection",
         label: "Widget sort direction",
         description:
           "Ascending uses the selected sort order; descending reverses it. " +
           'With "status", descending puts open tasks before completed tasks.',
-        currentValue: (cfg.reverseSort ?? false) ? "descending" : "ascending",
+        currentValue: cfg.sortDirection ?? "ascending",
         values: ["ascending", "descending"],
       },
       {
@@ -136,8 +136,8 @@ export async function openSettingsMenu(
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
           saveTasksConfig(cfg);
         }
-        if (id === "reverseSort") {
-          cfg.reverseSort = newValue === "descending";
+        if (id === "sortDirection") {
+          cfg.sortDirection = newValue as TasksConfig["sortDirection"];
           saveTasksConfig(cfg);
         }
         if (id === "hiddenAt") {

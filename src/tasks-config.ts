@@ -10,7 +10,7 @@ export interface TasksConfig {
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
   sortOrder?: "id" | "status" | "recent" | "oldest";  // default: "id"
-  reverseSort?: boolean;                                 // default: false
+  sortDirection?: "ascending" | "descending";          // default: "ascending"
   hiddenAt?: "top" | "bottom";                         // default: "bottom"
 }
 
