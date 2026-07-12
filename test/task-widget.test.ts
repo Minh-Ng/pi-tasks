@@ -271,6 +271,61 @@ describe("TaskWidget", () => {
     expect(lines[3]).toContain("Pending task");
   });
 
+  it("reverses status order so open tasks appear first", () => {
+    widget = new TaskWidget(store, { sortOrder: "status", sortDirection: "descending" });
+    widget.setUICtx(ui.ctx);
+    store.create("Pending task", "Desc");           // #1
+    store.create("Completed task", "Desc");         // #2
+    store.create("In progress task", "Desc");       // #3
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Reversed status order: pending, in_progress, completed
+    expect(lines[1]).toContain("Pending task");
+    expect(lines[2]).toContain("In progress task");
+    expect(lines[3]).toContain("Completed task");
+  });
+
+  it("reverses creation order when descending is selected", () => {
+    widget = new TaskWidget(store, { sortOrder: "id", sortDirection: "descending" });
+    widget.setUICtx(ui.ctx);
+    for (let id = 1; id <= 3; id++) store.create(`Task ${id}`, "Desc");
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines.slice(1).map(line => line.match(/#(\d+)/)?.[1])).toEqual(["3", "2", "1"]);
+  });
+
+  it("reverses updated-time order", () => {
+    vi.setSystemTime(100);
+    store.create("Older", "Desc");
+    vi.setSystemTime(200);
+    store.create("Newer", "Desc");
+    widget = new TaskWidget(store, { sortOrder: "recent", sortDirection: "descending" });
+    widget.setUICtx(ui.ctx);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("Older");
+    expect(lines[2]).toContain("Newer");
+  });
+
+  it("does not mutate store order when rendering descending", () => {
+    for (let id = 1; id <= 3; id++) store.create(`Task ${id}`, "Desc");
+    widget = new TaskWidget(store, { sortOrder: "id", sortDirection: "descending" });
+    widget.setUICtx(ui.ctx);
+    widget.update();
+    expect(renderWidget(ui.state).slice(1).map(line => line.match(/#(\d+)/)?.[1])).toEqual(["3", "2", "1"]);
+
+    const ascendingWidget = new TaskWidget(store, { sortOrder: "id" });
+    ascendingWidget.setUICtx(ui.ctx);
+    ascendingWidget.update();
+    expect(renderWidget(ui.state).slice(1).map(line => line.match(/#(\d+)/)?.[1])).toEqual(["1", "2", "3"]);
+    ascendingWidget.dispose();
+  });
+
   it("defaults to ID order when sortOrder is unset", () => {
     store.create("Pending task", "Desc");           // #1
     store.create("Completed task", "Desc");         // #2

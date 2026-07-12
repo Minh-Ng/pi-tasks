@@ -50,6 +50,16 @@ describe("TaskStore (in-memory)", () => {
     expect(tasks.map(t => t.id)).toEqual(["1", "2", "3"]);
   });
 
+  it("keeps list behavior independent from widget sort caching", () => {
+    store.create("First", "Desc");
+    store.create("Second", "Desc");
+    const first = store.list("status");
+    first[1].status = "completed";
+    first.pop();
+
+    expect(store.list("status").map(task => task.id)).toEqual(["2", "1"]);
+  });
+
   it("lists tasks sorted by status when sortOrder is 'status'", () => {
     store.create("Pending", "Desc");           // #1
     store.create("Completed", "Desc");         // #2
@@ -431,6 +441,7 @@ describe("TaskStore (file-backed)", () => {
     const t3 = store2.create("Task 3", "Desc");
     expect(t3.id).toBe("3");
   });
+
 });
 
 describe("TaskStore (absolute path)", () => {
