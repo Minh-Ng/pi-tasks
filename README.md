@@ -65,7 +65,7 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
 
-> The default `status` direction is completed-first. Choose descending to show pending and in-progress tasks first.
+> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order.
 
 ## Tools
 
