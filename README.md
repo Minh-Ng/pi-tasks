@@ -66,7 +66,6 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortBy: status` to keep active work visible and fold completed tasks away |
 
-> Existing `sortOrder` values (`id`, `status`, `recent`, and `oldest`) and `reverseSort` remain supported. Changing any new sorting setting migrates the full configuration to `sortBy`, `sortDirection`, and `statusOrder`.
 
 ## Tools
 
