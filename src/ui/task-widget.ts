@@ -9,6 +9,7 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { TaskSortCache } from "../task-sort.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 
@@ -85,6 +86,8 @@ export class TaskWidget {
   private metrics = new Map<string, TaskMetrics>();
   /** Cached TUI instance for requestRender() calls. */
   private tui: any | undefined;
+  /** Cached task ordering, kept separate from store persistence and mutation concerns. */
+  private taskSort = new TaskSortCache();
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
 
@@ -95,6 +98,7 @@ export class TaskWidget {
 
   setStore(store: TaskStore) {
     this.store = store;
+    this.taskSort.clear();
   }
 
   setUICtx(ctx: UICtx) {
@@ -138,7 +142,7 @@ export class TaskWidget {
   private renderWidget(tui: any, theme: Theme): string[] {
     const sortOrder = this.config.sortOrder ?? "id";
     const sortDirection = this.config.sortDirection ?? "ascending";
-    const tasks = this.store.list(sortOrder, sortDirection);
+    const tasks = this.taskSort.sort(this.store.snapshot(), sortOrder, sortDirection);
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 
@@ -235,9 +239,7 @@ export class TaskWidget {
   /** Force an immediate widget update. */
   update() {
     if (!this.uiCtx) return;
-    const sortOrder = this.config.sortOrder ?? "id";
-    const sortDirection = this.config.sortDirection ?? "ascending";
-    const tasks = this.store.list(sortOrder, sortDirection);
+    const tasks = this.store.snapshot();
 
     // Transition: visible → hidden
     if (tasks.length === 0) {

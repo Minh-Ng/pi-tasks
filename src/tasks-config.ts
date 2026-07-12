@@ -2,7 +2,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { TaskSortDirection, TaskSortOrder } from "./task-store.js";
+import type { TaskSortDirection, TaskSortOrder } from "./task-sort.js";
 
 export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
