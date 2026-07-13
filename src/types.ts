@@ -3,6 +3,7 @@
  */
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
+export type TaskExecutionMode = "foreground" | "background";
 
 export interface Task {
   id: string;
@@ -11,6 +12,9 @@ export interface Task {
   status: TaskStatus;
   activeForm?: string;
   owner?: string;
+  /** Declared execution kind. A live lease is maintained separately by the current extension runtime. */
+  executionMode?: TaskExecutionMode;
+  executionStartedAt?: number;
   metadata: Record<string, any>;
   blocks: string[];
   blockedBy: string[];

@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { sortTasks, type TaskSortOrder } from "./task-sort.js";
-import type { Task, TaskStatus, TaskStoreData } from "./types.js";
+import type { Task, TaskExecutionMode, TaskStatus, TaskStoreData } from "./types.js";
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
@@ -152,6 +152,7 @@ export class TaskStore {
     description?: string;
     activeForm?: string;
     owner?: string;
+    executionMode?: TaskExecutionMode | null;
     metadata?: Record<string, any>;
     addBlocks?: string[];
     addBlockedBy?: string[];
@@ -177,6 +178,10 @@ export class TaskStore {
       if (fields.status !== undefined) {
         task.status = fields.status;
         changedFields.push("status");
+        if (fields.status !== "in_progress") {
+          task.executionMode = undefined;
+          task.executionStartedAt = undefined;
+        }
       }
       if (fields.subject !== undefined) {
         task.subject = fields.subject;
@@ -193,6 +198,19 @@ export class TaskStore {
       if (fields.owner !== undefined) {
         task.owner = fields.owner;
         changedFields.push("owner");
+      }
+      if (fields.executionMode !== undefined) {
+        if (fields.executionMode === null) {
+          task.executionMode = undefined;
+          task.executionStartedAt = undefined;
+        } else {
+          if (task.status !== "in_progress") {
+            throw new Error("executionMode requires in_progress status");
+          }
+          task.executionStartedAt = Date.now();
+          task.executionMode = fields.executionMode;
+        }
+        changedFields.push("executionMode");
       }
 
       // Metadata: shallow merge, null deletes keys

@@ -550,6 +550,37 @@ describe("Standalone operation (no subagents extension)", () => {
     await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("in_progress");
+    expect(result.content[0].text).toContain("Execution: claimed (no live lease in this session)");
+  });
+
+  it("distinguishes explicit foreground and background execution in tool output", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Foreground", description: "desc" });
+    await mock.executeTool("TaskCreate", { subject: "Background", description: "desc" });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "1", status: "in_progress", owner: "main-thread", executionMode: "foreground",
+    });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "2", status: "in_progress", owner: "pid-123", executionMode: "background",
+    });
+
+    const list = await mock.executeTool("TaskList", {});
+    expect(list.content[0].text).toContain("#1 [in_progress/foreground]");
+    expect(list.content[0].text).toContain("#2 [in_progress/background]");
+    const background = await mock.executeTool("TaskGet", { taskId: "2" });
+    expect(background.content[0].text).toContain("Execution: background (live in this session)");
+  });
+
+  it("infers execution mode from owner and can clear the live lease", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Canary", description: "desc" });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "1", status: "in_progress", owner: "canary-pid-42",
+    });
+    let list = await mock.executeTool("TaskList", {});
+    expect(list.content[0].text).toContain("[in_progress/background]");
+
+    await mock.executeTool("TaskUpdate", { taskId: "1", executionMode: "none" });
+    list = await mock.executeTool("TaskList", {});
+    expect(list.content[0].text).toContain("[in_progress/claimed]");
   });
 
   it("TaskExecute gracefully refuses without subagents", async () => {

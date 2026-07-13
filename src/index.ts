@@ -30,6 +30,7 @@ import {
 } from "./reminder-cadence.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
+import type { TaskExecutionMode } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 
@@ -46,6 +47,11 @@ function textResult(msg: string) {
   return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
 }
 
+function inferExecutionMode(owner: string | undefined): TaskExecutionMode | undefined {
+  if (!owner) return undefined;
+  return owner === "main-thread" ? "foreground" : "background";
+}
+
 /** Task tool names — used to detect task tool usage for reminder suppression. */
 const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute"]);
 
@@ -56,7 +62,7 @@ const REMINDER_INTERVAL = 4;
 const AUTO_CLEAR_DELAY = 4;
 
 const SYSTEM_REMINDER = `<system-reminder>
-The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user
+The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress with foreground only during active main-thread work, background only for a real running process/agent, and completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
@@ -234,8 +240,8 @@ export default function (pi: ExtensionAPI) {
             ...(cascadeConfig.model ? { model: cascadeConfig.model } : {}),
           });
           agentTaskMap.set(agentId, next.id);
-          store.update(next.id, { owner: agentId, metadata: { ...next.metadata, agentId } });
-          widget.setActiveTask(next.id);
+          store.update(next.id, { owner: agentId, executionMode: "background", metadata: { ...next.metadata, agentId } });
+          widget.setActiveTask(next.id, true, "background", true);
         } catch (err: any) {
           store.update(next.id, { status: "pending", metadata: { ...next.metadata, lastError: err.message } });
         }
@@ -456,7 +462,7 @@ Use this tool proactively in these scenarios:
 - User explicitly requests todo list - When the user directly asks you to use the todo list
 - User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
 - After receiving new instructions - Immediately capture user requirements as tasks
-- When you start working on a task - Mark it as in_progress BEFORE beginning work
+- When you start working on a task - Mark it in_progress with executionMode foreground BEFORE beginning active main-thread work
 - After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
 
 ## When NOT to Use This Tool
@@ -473,7 +479,7 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
 
 - **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
 - **description**: Detailed description of what needs to be done, including context and acceptance criteria
-- **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., "Fixing authentication bug"). If omitted, the spinner shows the subject instead.
+- **activeForm** (optional): Present continuous form shown while a foreground/background live lease is active (e.g., "Fixing authentication bug"). If omitted, the spinner shows the subject instead.
 
 All tasks are created with status \`pending\`.
 
@@ -486,13 +492,14 @@ All tasks are created with status \`pending\`.
 - Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
     promptGuidelines: [
       "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
+      "Use executionMode foreground only during active main-thread work and background only for a real running process or agent.",
       "Mark tasks as in_progress before starting work and completed when done.",
       "Use TaskList to check for available work after completing a task.",
     ],
     parameters: Type.Object({
       subject: Type.String({ description: "A brief title for the task" }),
       description: Type.String({ description: "A detailed description of what needs to be done" }),
-      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
+      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown while a live foreground/background execution lease is active (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
     }),
@@ -549,7 +556,15 @@ Use TaskGet with a specific task ID to view full details including description a
       });
 
       const lines = sorted.map(task => {
-        let line = `#${task.id} [${task.status}] ${task.subject}`;
+        const execution = widget.getExecutionState(task.id);
+        const status = task.status === "in_progress"
+          ? execution.live
+            ? `in_progress/${execution.mode}`
+            : execution.mode
+              ? `in_progress/unmonitored-${execution.mode}`
+              : "in_progress/claimed"
+          : task.status;
+        let line = `#${task.id} [${status}] ${task.subject}`;
 
         if (task.owner) {
           line += ` (${task.owner})`;
@@ -619,6 +634,10 @@ Returns full task details:
       if (task.owner) {
         lines.push(`Owner: ${task.owner}`);
       }
+      if (task.status === "in_progress") {
+        const execution = widget.getExecutionState(task.id);
+        lines.push(`Execution: ${execution.mode ?? "claimed"} (${execution.live ? "live in this session" : "no live lease in this session"})`);
+      }
       lines.push(`Description: ${desc}`);
 
       if (task.blockedBy.length > 0) {
@@ -656,7 +675,8 @@ Returns full task details:
 ## When to Use This Tool
 
 **Before starting work on a task:**
-- Mark it in_progress BEFORE beginning — do not start work without updating status first
+- Mark it in_progress with executionMode foreground BEFORE active main-thread work
+- Use executionMode background only while a real process/subagent is running; use none for claimed/unmonitored work
 - After resolving, call TaskList to find your next task
 
 **Mark tasks as resolved:**
@@ -687,8 +707,9 @@ Returns full task details:
 - **status**: The task status (see Status Workflow below)
 - **subject**: Change the task title (imperative form, e.g., "Run tests")
 - **description**: Change the task description
-- **activeForm**: Present continuous form shown in spinner when in_progress (e.g., "Running tests")
+- **activeForm**: Present continuous form shown only while a live execution lease is active (e.g., "Running tests")
 - **owner**: Change the task owner (agent name)
+- **executionMode**: \`foreground\`, \`background\`, or \`none\`. A timer/spinner starts only for an explicit live mode. \`main-thread\` owners infer foreground; other owners infer background for compatibility.
 - **metadata**: Merge metadata keys into the task (set a key to null to delete it)
 - **addBlocks**: Mark tasks that cannot start until this one completes
 - **addBlockedBy**: Mark tasks that must complete before this one can start
@@ -705,9 +726,19 @@ Make sure to read a task's latest state using \`TaskGet\` before updating it.
 
 ## Examples
 
-Mark task as in progress when starting work:
+Mark foreground work as active:
 \`\`\`json
-{"taskId": "1", "status": "in_progress"}
+{"taskId": "1", "status": "in_progress", "owner": "main-thread", "executionMode": "foreground"}
+\`\`\`
+
+Mark a real background process as active:
+\`\`\`json
+{"taskId": "1", "status": "in_progress", "owner": "pid-1234", "executionMode": "background"}
+\`\`\`
+
+Mark work as claimed without implying live execution:
+\`\`\`json
+{"taskId": "1", "status": "in_progress", "executionMode": "none"}
 \`\`\`
 
 Mark task as completed after finishing work:
@@ -738,29 +769,49 @@ Set up task dependencies:
       })),
       subject: Type.Optional(Type.String({ description: "New subject for the task" })),
       description: Type.Optional(Type.String({ description: "New description for the task" })),
-      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
+      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown while a live execution lease is active" })),
       owner: Type.Optional(Type.String({ description: "New owner for the task" })),
+      executionMode: Type.Optional(Type.Unsafe<"foreground" | "background" | "none">({
+        type: "string",
+        enum: ["foreground", "background", "none"],
+        description: "Live execution kind. Use none for claimed/unmonitored in-progress work.",
+      })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Metadata keys to merge into the task. Set a key to null to delete it." })),
       addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
       addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { taskId, ...fields } = params;
+      const current = store.get(params.taskId);
+      if (!current) return Promise.resolve(textResult(`Task #${params.taskId} not found`));
+      const { taskId, executionMode, ...updates } = params;
+      const resultingStatus = updates.status === "deleted" ? "deleted" : (updates.status ?? current.status);
+      const resultingOwner = updates.owner ?? current.owner;
+      const selectedMode: TaskExecutionMode | null | undefined = executionMode === "none"
+        ? null
+        : executionMode ?? ((updates.status === "in_progress" || updates.owner !== undefined)
+          ? inferExecutionMode(resultingOwner)
+          : undefined);
+      if (selectedMode && resultingStatus !== "in_progress") {
+        return Promise.resolve(textResult("executionMode requires status in_progress"));
+      }
+      const fields = {
+        ...updates,
+        ...(selectedMode !== undefined ? { executionMode: selectedMode } : {}),
+      };
       const { task, changedFields, warnings } = store.update(taskId, fields);
 
       if (changedFields.length === 0 && !task) {
         return Promise.resolve(textResult(`Task #${taskId} not found`));
       }
 
-      // Update widget active task tracking
-      if (fields.status === "in_progress") {
-        widget.setActiveTask(taskId);
+      const establishesLiveLease = selectedMode !== undefined || updates.status === "in_progress";
+      if (task?.status === "in_progress" && task.executionMode && establishesLiveLease) {
+        widget.setActiveTask(taskId, true, task.executionMode, true);
         autoClear.resetBatchCountdown();
-      } else if (fields.status === "pending") {
-        autoClear.resetBatchCountdown();
-      } else if (fields.status === "completed" || fields.status === "deleted") {
+      } else if (selectedMode === null || (fields.status !== undefined && fields.status !== "in_progress")) {
         widget.setActiveTask(taskId, false);
+        if (fields.status === "pending") autoClear.resetBatchCountdown();
         if (fields.status === "completed") autoClear.trackCompletion(taskId, cadence.currentTurn);
       }
 
@@ -979,8 +1030,8 @@ Set up task dependencies:
             ...(params.model ? { model: params.model } : {}),
           });
           agentTaskMap.set(agentId, taskId);
-          store.update(taskId, { owner: agentId, metadata: { ...task.metadata, agentId } });
-          widget.setActiveTask(taskId);
+          store.update(taskId, { owner: agentId, executionMode: "background", metadata: { ...task.metadata, agentId } });
+          widget.setActiveTask(taskId, true, "background", true);
           launched.push(`#${taskId} → agent ${agentId}`);
         } catch (err: any) {
           debug(`spawn:error task=#${taskId}`, err);
@@ -1104,8 +1155,8 @@ Set up task dependencies:
         const action = await ui.select(title, actions);
 
         if (action === "▸ Start (in_progress)") {
-          store.update(taskId, { status: "in_progress" });
-          widget.setActiveTask(taskId);
+          store.update(taskId, { status: "in_progress", executionMode: null });
+          widget.setActiveTask(taskId, false);
           widget.update();
           return viewTasks();
         } else if (action === "✓ Complete") {

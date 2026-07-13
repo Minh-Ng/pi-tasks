@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
+- **Persistent widget** — live task list above the editor with distinct foreground (`✳✽`), background (`◐◓◑◒`), claimed (`◼`), pending (`◻`), and completed (`✔`) states. Timers run only while the current extension runtime holds a live execution lease.
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
 - **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
@@ -39,19 +39,38 @@ pi -e ./src/index.ts
 The extension renders a persistent widget above the editor:
 
 ```
-● 4 tasks (1 done, 1 in progress, 2 open)
+● 5 tasks (1 done, 1 foreground, 1 background, 1 claimed, 1 open)
   ✔ #1 Design the flux capacitor
-  ✳ #2 Acquiring plutonium… (2m 49s · ↑ 4.1k ↓ 1.2k)
-  ◻ #3 Install flux capacitor in DeLorean › blocked by #1
-  ◻ #4 Test time travel at 88 mph › blocked by #2, #3
+  ✳ #2 Implement containment… [foreground: main-thread] (2m 49s · ↑ 4.1k ↓ 1.2k)
+  ◐ #3 Monitor canary… [background: canary-pid-1234] (1m 12s)
+  ◼ #4 Review rollout [claimed · no live execution]
+  ◻ #5 Publish results › blocked by #2, #3
 ```
 
 | Icon | Meaning |
 |------|---------|
 | `✔` | Completed (strikethrough + dim) |
-| `◼` | In-progress (not actively executing) |
+| `◼` | Claimed/in-progress without a live execution lease; no timer |
 | `◻` | Pending |
-| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts) |
+| `✳`/`✽` | Live foreground execution; labeled `foreground` with elapsed time and token counts |
+| `◐`/`◓`/`◑`/`◒` | Live background process or subagent; labeled `background` with owner and elapsed time |
+
+Persisted execution declarations are not treated as proof that work is still alive after reload. They render as `foreground · unmonitored` or `background · unmonitored` without animation or a ticking timer until the current runtime establishes a new live lease.
+
+Live background rows can also show bounded structured progress from `metadata.progress`. Producers may update it through `TaskUpdate`:
+
+```json
+{
+  "progress": {
+    "phase": "validation",
+    "currentOperation": "validation-0002",
+    "lastActivityAt": "2026-07-13T05:10:20.000Z",
+    "operations": { "completed": 8, "seen": 10, "running": 1 }
+  }
+}
+```
+
+The widget renders phase, current operation, `completed/total` (or `completed/seen`) and activity age. Activity older than two minutes is labeled `stalled`. Labels are control-character stripped and length-bounded; arbitrary metadata is never rendered.
 
 ### Widget display settings
 
@@ -123,7 +142,8 @@ Update task fields, status, metadata, and dependencies.
 | `subject` | string | New title |
 | `description` | string | New description |
 | `activeForm` | string | Spinner text |
-| `owner` | string | Agent name |
+| `owner` | string | Agent/process owner. `main-thread` infers foreground; other non-empty owners infer background for compatibility |
+| `executionMode` | `foreground` / `background` / `none` | Explicit live execution kind. `none` keeps the task claimed/in-progress without a timer |
 | `metadata` | object | Shallow merge (null values delete keys) |
 | `addBlocks` | string[] | Task IDs this task blocks |
 | `addBlockedBy` | string[] | Task IDs that block this task |
@@ -178,11 +198,11 @@ With **auto-cascade** enabled (via `/tasks` → Settings), completed tasks autom
 ## Task Lifecycle
 
 ```
-pending → in_progress → completed
-                      → deleted (permanently removed)
+pending → in_progress (claimed, foreground, or background) → completed
+                                                           → deleted (permanently removed)
 ```
 
-Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset.
+Tasks are created as `pending`. Mark `in_progress` before starting work and choose `executionMode: foreground` only while the main thread is actively working, `background` only while a real subprocess/subagent is running, or `none` for claimed/unmonitored work. Mark `completed` when done. `deleted` removes entirely — IDs never reset.
 
 ## Dependency Management
 

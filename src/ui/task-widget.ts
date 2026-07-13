@@ -5,7 +5,8 @@
  *   ✔ completed tasks (strikethrough + dim)
  *   ◼ in_progress tasks
  *   ◻ pending tasks
- *   ✳/✽ actively executing task (star spinner with activeForm text)
+ *   ✳/✽ foreground execution (star spinner with activeForm text)
+ *   ◐/◓/◑/◒ background execution (distinct spinner and label)
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -15,7 +16,7 @@ import type { TasksConfig } from "../tasks-config.js";
 
 // ---- Truncation ----
 
-import type { Task } from "../types.js";
+import type { Task, TaskExecutionMode } from "../types.js";
 
 function truncateFromTop(tasks: Task[], limit: number): Task[] {
   return tasks.slice(-limit);
@@ -44,8 +45,9 @@ export type UICtx = {
   ): void;
 };
 
-/** Star spinner frames for animated active task indicator (matches Claude Code). */
-const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
+/** Foreground and background work deliberately use different animation vocabularies. */
+const FOREGROUND_SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
+const BACKGROUND_SPINNER = ["◐", "◓", "◑", "◒"];
 
 const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
@@ -74,14 +76,54 @@ function formatTokens(n: number): string {
   return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
 }
 
+function boundedProgressLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.length > 48 ? `${normalized.slice(0, 47)}…` : normalized;
+}
+
+function nonnegativeCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Render only the bounded, documented metadata.progress contract. */
+export function formatTaskProgress(metadata: Record<string, any> | undefined, now = Date.now()): string | undefined {
+  const value = metadata?.progress;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const progress = value as Record<string, unknown>;
+  const parts: string[] = [];
+  const phase = boundedProgressLabel(progress.phase);
+  const operation = boundedProgressLabel(progress.currentOperation);
+  if (phase) parts.push(phase);
+  if (operation && operation !== phase) parts.push(operation);
+
+  const operations = progress.operations && typeof progress.operations === "object" && !Array.isArray(progress.operations)
+    ? progress.operations as Record<string, unknown>
+    : undefined;
+  const completed = nonnegativeCount(progress.completed) ?? nonnegativeCount(operations?.completed);
+  const total = nonnegativeCount(progress.total) ?? nonnegativeCount(progress.cardsTotal);
+  const seen = nonnegativeCount(progress.seen) ?? nonnegativeCount(operations?.seen);
+  if (completed !== undefined && total !== undefined && total > 0) parts.push(`${completed}/${total}`);
+  else if (completed !== undefined && seen !== undefined && seen > 0) parts.push(`${completed}/${seen} ops`);
+
+  const activityValue = progress.lastActivityAt;
+  const activityMs = typeof activityValue === "number" ? activityValue : typeof activityValue === "string" ? Date.parse(activityValue) : Number.NaN;
+  if (Number.isFinite(activityMs) && activityMs <= now) {
+    const age = now - activityMs;
+    parts.push(age >= 120_000 ? `stalled ${formatDuration(age)}` : `active ${formatDuration(age)} ago`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
 // ---- Widget ----
 
 export class TaskWidget {
   private uiCtx: UICtx | undefined;
   private widgetFrame = 0;
   private widgetInterval: ReturnType<typeof setInterval> | undefined;
-  /** IDs of tasks currently being actively executed (show spinner). */
-  private activeTaskIds = new Set<string>();
+  /** Live execution leases owned by this extension runtime. Persisted task state alone is never proof of live work. */
+  private liveExecutions = new Map<string, TaskExecutionMode>();
   /** Per-task runtime metrics keyed by task ID. */
   private metrics = new Map<string, TaskMetrics>();
   /** Cached TUI instance for requestRender() calls. */
@@ -105,24 +147,39 @@ export class TaskWidget {
     this.uiCtx = ctx;
   }
 
-  /** Add or remove a task from the active spinner set. */
-  setActiveTask(taskId: string | undefined, active = true) {
+  /** Start or stop a live execution lease. In-progress status by itself does not start a timer. */
+  setActiveTask(taskId: string | undefined, active = true, mode?: TaskExecutionMode, restart = false) {
     if (taskId && active) {
-      this.activeTaskIds.add(taskId);
-      if (!this.metrics.has(taskId)) {
-        this.metrics.set(taskId, { startedAt: Date.now(), inputTokens: 0, outputTokens: 0 });
+      const task = this.store.get(taskId);
+      const executionMode = mode ?? task?.executionMode ?? (task?.metadata?.agentId ? "background" : "foreground");
+      const previousMode = this.liveExecutions.get(taskId);
+      this.liveExecutions.set(taskId, executionMode);
+      if (!this.metrics.has(taskId) || previousMode !== executionMode || restart) {
+        this.metrics.set(taskId, {
+          startedAt: task?.executionStartedAt ?? Date.now(),
+          inputTokens: 0,
+          outputTokens: 0,
+        });
       }
       this.ensureTimer();
     } else if (taskId) {
-      this.activeTaskIds.delete(taskId);
+      this.liveExecutions.delete(taskId);
+      this.metrics.delete(taskId);
     }
     this.update();
   }
 
-  /** Record token usage for the currently active task(s). */
+  /** Return the current runtime's execution lease, if any. */
+  getExecutionState(taskId: string): { mode?: TaskExecutionMode; live: boolean } {
+    const liveMode = this.liveExecutions.get(taskId);
+    if (liveMode) return { mode: liveMode, live: true };
+    const task = this.store.get(taskId);
+    return { mode: task?.executionMode ?? (task?.metadata?.agentId ? "background" : undefined), live: false };
+  }
+
+  /** Record token usage for currently live executions only. */
   addTokenUsage(inputTokens: number, outputTokens: number) {
-    // Distribute to all currently active tasks
-    for (const id of this.activeTaskIds) {
+    for (const id of this.liveExecutions.keys()) {
       const m = this.metrics.get(id);
       if (m) {
         m.inputTokens += inputTokens;
@@ -151,14 +208,17 @@ export class TaskWidget {
     const completed = tasks.filter(t => t.status === "completed");
     const inProgress = tasks.filter(t => t.status === "in_progress");
     const pending = tasks.filter(t => t.status === "pending");
+    const foregroundCount = inProgress.filter(t => this.liveExecutions.get(t.id) === "foreground").length;
+    const backgroundCount = inProgress.filter(t => this.liveExecutions.get(t.id) === "background").length;
+    const claimedCount = inProgress.length - foregroundCount - backgroundCount;
 
     const parts: string[] = [];
     if (completed.length > 0) parts.push(`${completed.length} done`);
-    if (inProgress.length > 0) parts.push(`${inProgress.length} in progress`);
+    if (foregroundCount > 0) parts.push(`${foregroundCount} foreground`);
+    if (backgroundCount > 0) parts.push(`${backgroundCount} background`);
+    if (claimedCount > 0) parts.push(`${claimedCount} claimed`);
     if (pending.length > 0) parts.push(`${pending.length} open`);
     const statusText = `${tasks.length} tasks (${parts.join(", ")})`;
-
-    const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
     const showAll = this.config.showAll ?? false;
@@ -176,11 +236,13 @@ export class TaskWidget {
     }
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
-      const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
+      const liveMode = task.status === "in_progress" ? this.liveExecutions.get(task.id) : undefined;
 
       let icon: string;
-      if (isActive) {
-        icon = theme.fg("accent", spinnerChar);
+      if (liveMode === "foreground") {
+        icon = theme.fg("accent", FOREGROUND_SPINNER[this.widgetFrame % FOREGROUND_SPINNER.length]);
+      } else if (liveMode === "background") {
+        icon = theme.fg("accent", BACKGROUND_SPINNER[this.widgetFrame % BACKGROUND_SPINNER.length]);
       } else if (task.status === "completed") {
         icon = theme.fg("success", "✔");
       } else if (task.status === "in_progress") {
@@ -201,10 +263,13 @@ export class TaskWidget {
       }
 
       let text: string;
-      if (isActive) {
+      if (liveMode) {
         const form = task.activeForm || task.subject;
-        const agentId = task.metadata?.agentId;
-        const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
+        const executionOwner = task.owner ?? (task.metadata?.agentId ? `agent ${task.metadata.agentId.slice(0, 5)}` : undefined);
+        const owner = executionOwner ? `: ${executionOwner}` : "";
+        const modeLabel = theme.fg("dim", `[${liveMode}${owner}]`);
+        const progress = liveMode === "background" ? formatTaskProgress(task.metadata) : undefined;
+        const progressLabel = progress ? ` ${theme.fg("dim", `‹ ${progress}`)}` : "";
         const m = this.metrics.get(task.id);
         let stats = "";
         if (m) {
@@ -216,14 +281,18 @@ export class TaskWidget {
             ? ` ${theme.fg("dim", `(${elapsed} · ${tokenParts.join(" ")})`)}`
             : ` ${theme.fg("dim", `(${elapsed})`)}`;
         }
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
+        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + "…")} ${modeLabel}${progressLabel}${stats}`;
       } else if (task.status === "completed") {
         text = `  ${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}`;
+      } else if (task.status === "in_progress") {
+        const declaredMode = task.executionMode ?? (task.metadata?.agentId ? "background" : undefined);
+        const executionOwner = task.owner ?? (task.metadata?.agentId ? `agent ${task.metadata.agentId.slice(0, 5)}` : undefined);
+        const stateLabel = declaredMode
+          ? `[${declaredMode} · unmonitored${executionOwner ? ` · ${executionOwner}` : ""}]`
+          : "[claimed · no live execution]";
+        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject} ${theme.fg("dim", stateLabel)}`;
       } else {
-        const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
-          ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
-          : "";
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}`;
+        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}`;
       }
 
       lines.push(truncate(text + suffix));
@@ -254,17 +323,17 @@ export class TaskWidget {
       return;
     }
 
-    // Prune stale active IDs (deleted or no longer in_progress)
-    for (const id of this.activeTaskIds) {
-      const t = this.store.get(id);
-      if (!t || t.status !== "in_progress") {
-        this.activeTaskIds.delete(id);
+    // Prune stale live leases (deleted, no longer in progress, or mode changed externally).
+    for (const [id, mode] of this.liveExecutions) {
+      const task = this.store.get(id);
+      if (!task || task.status !== "in_progress" || (task.executionMode !== undefined && task.executionMode !== mode)) {
+        this.liveExecutions.delete(id);
         this.metrics.delete(id);
       }
     }
 
-    // Check if any task needs animation
-    const hasActiveSpinner = tasks.some(t => this.activeTaskIds.has(t.id) && t.status === "in_progress");
+    // Only a live runtime lease animates and advances a timer.
+    const hasActiveSpinner = tasks.some(task => this.liveExecutions.has(task.id) && task.status === "in_progress");
     if (hasActiveSpinner) {
       this.ensureTimer();
     } else if (!hasActiveSpinner && this.widgetInterval) {
@@ -295,6 +364,8 @@ export class TaskWidget {
     if (this.uiCtx) {
       this.uiCtx.setWidget("tasks", undefined);
     }
+    this.liveExecutions.clear();
+    this.metrics.clear();
     this.widgetRegistered = false;
     this.tui = undefined;
   }

@@ -112,7 +112,31 @@ describe("TaskStore (in-memory)", () => {
     const { task, changedFields } = store.update("1", { status: "in_progress" });
 
     expect(task!.status).toBe("in_progress");
+    expect(task!.executionMode).toBeUndefined();
     expect(changedFields).toEqual(["status"]);
+  });
+
+  it("persists execution mode and start time only for in-progress work", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    store.create("Test", "Desc");
+    store.update("1", { status: "in_progress", executionMode: "background" });
+    expect(store.get("1")!.executionMode).toBe("background");
+    expect(store.get("1")!.executionStartedAt).toBe(1_000);
+
+    vi.advanceTimersByTime(500);
+    store.update("1", { executionMode: "foreground" });
+    expect(store.get("1")!.executionMode).toBe("foreground");
+    expect(store.get("1")!.executionStartedAt).toBe(1_500);
+
+    store.update("1", { status: "completed" });
+    expect(store.get("1")!.executionMode).toBeUndefined();
+    expect(store.get("1")!.executionStartedAt).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("rejects execution mode on work that is not in progress", () => {
+    store.create("Test", "Desc");
+    expect(() => store.update("1", { executionMode: "background" })).toThrow(/in_progress/);
   });
 
   it("updates multiple fields at once", () => {

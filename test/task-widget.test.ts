@@ -99,16 +99,102 @@ describe("TaskWidget", () => {
     expect(lines[1]).toContain("~~#1 Done task~~");
   });
 
-  it("renders active tasks with spinner icon", () => {
+  it("renders live foreground tasks with a labeled star spinner", () => {
     store.create("Running thing", "Desc", "Processing data");
-    store.update("1", { status: "in_progress" });
-    widget.setActiveTask("1", true);
+    store.update("1", { status: "in_progress", owner: "main-thread", executionMode: "foreground" });
+    widget.setActiveTask("1", true, "foreground");
 
     const lines = renderWidget(ui.state);
-    // Should show activeForm text with "…" suffix
+    expect(lines[0]).toContain("1 foreground");
     expect(lines[1]).toContain("Processing data…");
-    // Should NOT show ◼ for active task
+    expect(lines[1]).toContain("[foreground: main-thread]");
     expect(lines[1]).not.toContain("◼");
+  });
+
+  it("renders live background tasks with a distinct spinner, owner, and timer", () => {
+    store.create("Run canary", "Desc", "Monitoring canary");
+    store.update("1", { status: "in_progress", owner: "canary-pid-123", executionMode: "background" });
+    widget.setActiveTask("1", true, "background");
+    vi.advanceTimersByTime(5_000);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[0]).toContain("1 background");
+    expect(lines[1]).toMatch(/[◐◓◑◒]/);
+    expect(lines[1]).toContain("Monitoring canary…");
+    expect(lines[1]).toContain("[background: canary-pid-123]");
+    expect(lines[1]).toContain("5s");
+    expect(lines[1]).not.toMatch(/[✳✴✵✶✷✸✹✺✻✼✽]/);
+  });
+
+  it("renders bounded structured progress for a healthy background task", () => {
+    vi.setSystemTime(new Date("2026-07-13T05:10:30.000Z"));
+    store.create("Run evaluation", "Desc", "Monitoring evaluation", {
+      progress: {
+        phase: "validation",
+        currentOperation: "validation-0002",
+        lastActivityAt: "2026-07-13T05:10:20.000Z",
+        operations: { completed: 8, seen: 10, running: 1 },
+      },
+    });
+    store.update("1", { status: "in_progress", owner: "pid-42", executionMode: "background" });
+    widget.setActiveTask("1", true, "background");
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("validation · validation-0002 · 8/10 ops · active 10s ago");
+  });
+
+  it("labels stale background activity and bounds untrusted progress labels", () => {
+    vi.setSystemTime(new Date("2026-07-13T05:15:00.000Z"));
+    store.create("Run evaluation", "Desc", "Monitoring", {
+      progress: {
+        phase: `phase-${"x".repeat(100)}`,
+        currentOperation: "op\nwith-control",
+        lastActivityAt: "2026-07-13T05:10:00.000Z",
+        completed: 3,
+        total: 5,
+      },
+    });
+    store.update("1", { status: "in_progress", executionMode: "background" });
+    widget.setActiveTask("1", true, "background");
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("3/5 · stalled 5m");
+    expect(lines[1]).not.toContain("\n");
+    expect(lines[1].length).toBeLessThanOrEqual(200);
+  });
+
+  it("ignores malformed progress metadata", () => {
+    store.create("Run evaluation", "Desc", "Monitoring", { progress: "not-an-object" });
+    store.update("1", { status: "in_progress", executionMode: "background" });
+    widget.setActiveTask("1", true, "background");
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).not.toContain("‹");
+  });
+
+  it("does not animate or start a timer for merely claimed work", () => {
+    store.create("Claimed task", "Desc");
+    store.update("1", { status: "in_progress" });
+    vi.advanceTimersByTime(30_000);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[0]).toContain("1 claimed");
+    expect(lines[1]).toContain("◼");
+    expect(lines[1]).toContain("[claimed · no live execution]");
+    expect(lines[1]).not.toContain("30s");
+  });
+
+  it("shows persisted execution modes as unmonitored after runtime rehydration", () => {
+    store.create("Old background task", "Desc");
+    store.update("1", { status: "in_progress", executionMode: "background" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[0]).toContain("1 claimed");
+    expect(lines[1]).toContain("[background · unmonitored]");
+    expect(lines[1]).not.toMatch(/[◐◓◑◒]/);
   });
 
   it("shows blocked-by info for pending tasks", () => {
@@ -145,7 +231,7 @@ describe("TaskWidget", () => {
     const lines = renderWidget(ui.state);
     expect(lines[0]).toContain("3 tasks");
     expect(lines[0]).toContain("1 done");
-    expect(lines[0]).toContain("1 in progress");
+    expect(lines[0]).toContain("1 claimed");
     expect(lines[0]).toContain("1 open");
   });
 
