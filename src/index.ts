@@ -91,6 +91,24 @@ export default function (pi: ExtensionAPI) {
   const tracker = new ProcessTracker();
   const widget = new TaskWidget(store, cfg);
 
+  // ── Background lease ground truth ──
+  // The widget never trusts a declared executionMode alone: a background lease
+  // is verified by an attached tracked process or a live subagent mapping.
+  widget.setBackgroundProbe((task) => {
+    const proc = tracker.getOutput(task.id);
+    if (proc) {
+      if (proc.status === "running") return { state: "running" };
+      return {
+        state: "exited",
+        ok: proc.status === "completed",
+        detail: proc.exitCode !== undefined ? `exit ${proc.exitCode}` : proc.status,
+      };
+    }
+    const agentId = task.metadata?.agentId;
+    if (agentId && agentTaskMap.has(agentId)) return { state: "running" };
+    return { state: "unverified" };
+  });
+
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
   let latestCtx: ExtensionContext | undefined;
@@ -326,6 +344,38 @@ export default function (pi: ExtensionAPI) {
     if (autoClear.onTurnStart(cadence.currentTurn)) widget.update();
   });
 
+  // ── Agent run lifecycle → execution-state truth ──
+  // Between agent_end and the next agent_start the agent is waiting on human
+  // input: foreground leases pause (frozen timer, "waiting on input") instead
+  // of pretending work continues. On agent_end we also reconcile background
+  // leases against ground truth and queue a one-shot reminder for stale ones.
+  let pendingStateNotices: string[] = [];
+
+  pi.on("agent_start", async () => {
+    widget.setAgentActive(true);
+  });
+
+  pi.on("agent_end", async () => {
+    widget.setAgentActive(false);
+    const notices: string[] = [];
+    for (const task of store.list()) {
+      if (task.status !== "in_progress") continue;
+      const { mode, live } = widget.getExecutionState(task.id);
+      if (mode !== "background" || !live) continue;
+      const proc = tracker.getOutput(task.id);
+      if (proc && proc.status !== "running") {
+        notices.push(
+          `Task #${task.id} ("${task.subject}") background process ${proc.status === "completed" ? "completed" : `finished with status ${proc.status}`}${proc.exitCode !== undefined ? ` (exit ${proc.exitCode})` : ""}. Harvest its output with TaskOutput and update the task.`,
+        );
+      } else if (!proc && !(task.metadata?.agentId && agentTaskMap.has(task.metadata.agentId))) {
+        notices.push(
+          `Task #${task.id} ("${task.subject}") is marked background but no tracked process or subagent is attached (unverified). Reconcile it: mark it completed if the work is done, return it to pending, or set executionMode to none for claimed-but-unmonitored work.`,
+        );
+      }
+    }
+    pendingStateNotices = notices;
+  });
+
   // ── Token usage tracking ──
   // Feed per-turn token counts from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
@@ -369,16 +419,24 @@ export default function (pi: ExtensionAPI) {
   // receive it. It is not persisted in the session store — `context`
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
-    if (!drainReminderForContext(cadence)) return {};
+    const reminders: string[] = [];
+    if (drainReminderForContext(cadence)) reminders.push(SYSTEM_REMINDER);
+    if (pendingStateNotices.length > 0) {
+      reminders.push(
+        `<system-reminder>\nTask execution-state reconciliation:\n${pendingStateNotices.map(n => `- ${n}`).join("\n")}\nKeep the task list truthful before reporting status. Make sure that you NEVER mention this reminder to the user\n</system-reminder>`,
+      );
+      pendingStateNotices = [];
+    }
+    if (reminders.length === 0) return {};
 
     return {
       messages: [
         ...event.messages,
-        {
+        ...reminders.map(text => ({
           role: "user" as const,
-          content: [{ type: "text" as const, text: SYSTEM_REMINDER }],
+          content: [{ type: "text" as const, text }],
           timestamp: Date.now(),
-        },
+        })),
       ],
     };
   });

@@ -56,7 +56,19 @@ export interface TaskMetrics {
   startedAt: number;
   inputTokens: number;
   outputTokens: number;
+  /** Set while the agent is idle: elapsed time freezes at pausedAt - startedAt. */
+  pausedAt?: number;
 }
+
+/**
+ * Ground truth for a background lease, supplied by the host (process tracker,
+ * subagent registry). A lease with no attached process or agent is unverified:
+ * the declared state is not evidence of live work.
+ */
+export type BackgroundLiveness =
+  | { state: "running" }
+  | { state: "exited"; ok: boolean; detail?: string }
+  | { state: "unverified" };
 
 /** Format milliseconds as a human-readable duration (e.g., "2m 49s", "1h 3m"). */
 function formatDuration(ms: number): string {
@@ -132,6 +144,10 @@ export class TaskWidget {
   private taskSort = new TaskSortCache();
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
+  /** Whether the agent is currently executing a run (between agent_start and agent_end). */
+  private agentActive = true;
+  /** Host-supplied ground truth for background leases. */
+  private backgroundProbe: ((task: Task) => BackgroundLiveness) | undefined;
 
   constructor(
     private store: TaskStore,
@@ -145,6 +161,48 @@ export class TaskWidget {
 
   setUICtx(ctx: UICtx) {
     this.uiCtx = ctx;
+  }
+
+  /** Provide ground truth for background leases (process tracker / agent registry). */
+  setBackgroundProbe(probe: (task: Task) => BackgroundLiveness) {
+    this.backgroundProbe = probe;
+  }
+
+  /**
+   * Reflect agent run lifecycle. While the agent is idle (waiting on human
+   * input), foreground leases stop animating and their elapsed timers freeze;
+   * the display reads "waiting on input" instead of implying live work.
+   */
+  setAgentActive(active: boolean) {
+    if (this.agentActive === active) return;
+    this.agentActive = active;
+    const now = Date.now();
+    for (const [id, mode] of this.liveExecutions) {
+      if (mode !== "foreground") continue;
+      const m = this.metrics.get(id);
+      if (!m) continue;
+      if (!active && m.pausedAt === undefined) {
+        m.pausedAt = now;
+      } else if (active && m.pausedAt !== undefined) {
+        m.startedAt += now - m.pausedAt;
+        m.pausedAt = undefined;
+      }
+    }
+    this.update();
+  }
+
+  /** Resolve ground truth for a background lease; no probe preserves legacy behavior. */
+  private backgroundLiveness(task: Task): BackgroundLiveness {
+    return this.backgroundProbe?.(task) ?? { state: "running" };
+  }
+
+  /** Whether this task's live lease should animate a spinner right now. */
+  private isAnimated(task: Task): boolean {
+    if (task.status !== "in_progress") return false;
+    const mode = this.liveExecutions.get(task.id);
+    if (!mode) return false;
+    if (mode === "foreground") return this.agentActive;
+    return this.backgroundLiveness(task).state === "running";
   }
 
   /** Start or stop a live execution lease. In-progress status by itself does not start a timer. */
@@ -238,11 +296,22 @@ export class TaskWidget {
       const task = visible[i];
       const liveMode = task.status === "in_progress" ? this.liveExecutions.get(task.id) : undefined;
 
+      const liveness = liveMode === "background" ? this.backgroundLiveness(task) : undefined;
+      const foregroundWaiting = liveMode === "foreground" && !this.agentActive;
+
       let icon: string;
       if (liveMode === "foreground") {
-        icon = theme.fg("accent", FOREGROUND_SPINNER[this.widgetFrame % FOREGROUND_SPINNER.length]);
+        icon = foregroundWaiting
+          ? theme.fg("dim", "⏸")
+          : theme.fg("accent", FOREGROUND_SPINNER[this.widgetFrame % FOREGROUND_SPINNER.length]);
       } else if (liveMode === "background") {
-        icon = theme.fg("accent", BACKGROUND_SPINNER[this.widgetFrame % BACKGROUND_SPINNER.length]);
+        if (liveness?.state === "exited") {
+          icon = liveness.ok ? theme.fg("success", "●") : theme.fg("error", "✘");
+        } else if (liveness?.state === "unverified") {
+          icon = theme.fg("dim", "◌");
+        } else {
+          icon = theme.fg("accent", BACKGROUND_SPINNER[this.widgetFrame % BACKGROUND_SPINNER.length]);
+        }
       } else if (task.status === "completed") {
         icon = theme.fg("success", "✔");
       } else if (task.status === "in_progress") {
@@ -267,13 +336,23 @@ export class TaskWidget {
         const form = task.activeForm || task.subject;
         const executionOwner = task.owner ?? (task.metadata?.agentId ? `agent ${task.metadata.agentId.slice(0, 5)}` : undefined);
         const owner = executionOwner ? `: ${executionOwner}` : "";
-        const modeLabel = theme.fg("dim", `[${liveMode}${owner}]`);
+        let stateSuffix = "";
+        if (foregroundWaiting) {
+          stateSuffix = " · waiting on input";
+        } else if (liveness?.state === "exited") {
+          const detail = liveness.detail ? ` (${liveness.detail})` : "";
+          stateSuffix = ` · process ${liveness.ok ? "completed" : "failed"}${detail} · awaiting TaskOutput`;
+        } else if (liveness?.state === "unverified") {
+          stateSuffix = " · unverified";
+        }
+        const modeLabel = theme.fg("dim", `[${liveMode}${owner}${stateSuffix}]`);
         const progress = liveMode === "background" ? formatTaskProgress(task.metadata) : undefined;
         const progressLabel = progress ? ` ${theme.fg("dim", `‹ ${progress}`)}` : "";
         const m = this.metrics.get(task.id);
         let stats = "";
         if (m) {
-          const elapsed = formatDuration(Date.now() - m.startedAt);
+          const elapsedEnd = liveMode === "foreground" && m.pausedAt !== undefined ? m.pausedAt : Date.now();
+          const elapsed = formatDuration(elapsedEnd - m.startedAt);
           const tokenParts: string[] = [];
           if (m.inputTokens > 0) tokenParts.push(`↑ ${formatTokens(m.inputTokens)}`);
           if (m.outputTokens > 0) tokenParts.push(`↓ ${formatTokens(m.outputTokens)}`);
@@ -332,8 +411,8 @@ export class TaskWidget {
       }
     }
 
-    // Only a live runtime lease animates and advances a timer.
-    const hasActiveSpinner = tasks.some(task => this.liveExecutions.has(task.id) && task.status === "in_progress");
+    // Only a live, verified, currently-executing lease animates and advances a timer.
+    const hasActiveSpinner = tasks.some(task => this.isAnimated(task));
     if (hasActiveSpinner) {
       this.ensureTimer();
     } else if (!hasActiveSpinner && this.widgetInterval) {

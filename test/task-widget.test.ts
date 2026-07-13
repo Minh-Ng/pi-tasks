@@ -681,3 +681,106 @@ describe("formatDuration (via widget rendering)", () => {
     expect(lines[1]).toContain("↓ 4.1k");  // 4100 → "4.1k"
   });
 });
+
+describe("execution-state truth", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new TaskStore();
+    widget = new TaskWidget(store);
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  it("foreground lease pauses with frozen timer while agent is idle, resumes on activity", () => {
+    const t = store.create("Fix bug", "", "Fixing bug");
+    store.update(t.id, { status: "in_progress", owner: "main-thread", executionMode: "foreground" });
+    widget.setActiveTask(t.id, true, "foreground");
+
+    vi.advanceTimersByTime(5_000);
+    let lines = renderWidget(ui.state);
+    expect(lines.join("\n")).toContain("[foreground: main-thread]");
+    expect(lines.join("\n")).toContain("(5s)");
+
+    // Agent settles → waiting on input, timer freezes
+    widget.setAgentActive(false);
+    vi.advanceTimersByTime(60_000);
+    lines = renderWidget(ui.state);
+    expect(lines.join("\n")).toContain("waiting on input");
+    expect(lines.join("\n")).toContain("⏸");
+    expect(lines.join("\n")).toContain("(5s)"); // frozen, not 1m 5s
+
+    // Agent resumes → paused time excluded from elapsed
+    widget.setAgentActive(true);
+    vi.advanceTimersByTime(3_000);
+    lines = renderWidget(ui.state);
+    expect(lines.join("\n")).not.toContain("waiting on input");
+    expect(lines.join("\n")).toContain("(8s)"); // 5s + 3s, 60s pause excluded
+  });
+
+  it("idle agent stops the animation interval when only foreground leases exist", () => {
+    const t = store.create("Work", "");
+    store.update(t.id, { status: "in_progress", owner: "main-thread", executionMode: "foreground" });
+    widget.setActiveTask(t.id, true, "foreground");
+    expect((widget as any).widgetInterval).toBeDefined();
+
+    widget.setAgentActive(false);
+    widget.update();
+    expect((widget as any).widgetInterval).toBeUndefined();
+
+    widget.setAgentActive(true);
+    widget.update();
+    expect((widget as any).widgetInterval).toBeDefined();
+  });
+
+  it("renders unverified background leases without implying live work", () => {
+    const t = store.create("Ghost work", "");
+    store.update(t.id, { status: "in_progress", owner: "some-agent", executionMode: "background" });
+    widget.setBackgroundProbe(() => ({ state: "unverified" }));
+    widget.setActiveTask(t.id, true, "background");
+
+    const lines = renderWidget(ui.state);
+    expect(lines.join("\n")).toContain("[background: some-agent · unverified]");
+    expect(lines.join("\n")).toContain("◌");
+    // Unverified leases must not animate
+    widget.update();
+    expect((widget as any).widgetInterval).toBeUndefined();
+  });
+
+  it("renders exited background processes with outcome and harvest hint", () => {
+    const t = store.create("Long build", "");
+    store.update(t.id, { status: "in_progress", owner: "pid-42", executionMode: "background" });
+    widget.setBackgroundProbe(() => ({ state: "exited", ok: false, detail: "exit 1" }));
+    widget.setActiveTask(t.id, true, "background");
+
+    const lines = renderWidget(ui.state);
+    expect(lines.join("\n")).toContain("process failed (exit 1) · awaiting TaskOutput");
+    expect(lines.join("\n")).toContain("✘");
+
+    widget.setBackgroundProbe(() => ({ state: "exited", ok: true, detail: "exit 0" }));
+    const okLines = renderWidget(ui.state);
+    expect(okLines.join("\n")).toContain("process completed (exit 0) · awaiting TaskOutput");
+  });
+
+  it("running background leases keep the legacy spinner behavior", () => {
+    const t = store.create("Server", "");
+    store.update(t.id, { status: "in_progress", owner: "pid-9", executionMode: "background" });
+    widget.setBackgroundProbe(() => ({ state: "running" }));
+    widget.setActiveTask(t.id, true, "background");
+
+    const lines = renderWidget(ui.state);
+    expect(lines.join("\n")).toContain("[background: pid-9]");
+    expect((widget as any).widgetInterval).toBeDefined();
+    // Background leases are unaffected by agent idling
+    widget.setAgentActive(false);
+    expect((widget as any).widgetInterval).toBeDefined();
+  });
+});

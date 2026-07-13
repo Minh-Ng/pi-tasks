@@ -63,11 +63,13 @@ function mockPi() {
       if (!tool) throw new Error(`Tool ${name} not registered`);
       return tool.execute("call-1", params, undefined, undefined, ctx ?? mockCtx());
     },
-    /** Fire lifecycle event handlers (turn_start, tool_result, etc.) */
+    /** Fire lifecycle event handlers (turn_start, tool_result, etc.). Returns handler results. */
     async fireLifecycle(event: string, ...args: any[]) {
+      const results: any[] = [];
       for (const h of lifecycleHandlers.get(event) ?? []) {
-        await h(...args);
+        results.push(await h(...args));
       }
+      return results;
     },
     /** Emit an event on pi.events (simulates subagent extension). */
     emitEvent(channel: string, data: unknown) {
@@ -1076,5 +1078,78 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
 
     const bPrompt = rpc.spawned[1].prompt;
     expect(bPrompt).not.toContain("Prerequisite task results");
+  });
+});
+
+describe("Execution-state reconciliation", () => {
+  async function setupWithStaleBackgroundLease() {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx();
+    await mock.fireLifecycle("turn_start", {}, ctx);
+    await mock.executeTool("TaskCreate", { subject: "Ghost task", description: "Stale lease repro" });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "1",
+      status: "in_progress",
+      owner: "phantom-agent",
+      executionMode: "background",
+    });
+    return { mock, ctx };
+  }
+
+  it("queues a reconciliation reminder for unverified background leases at agent_end", async () => {
+    const { mock, ctx } = await setupWithStaleBackgroundLease();
+
+    await mock.fireLifecycle("agent_end", {}, ctx);
+    const [result] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] },
+      ctx,
+    );
+
+    expect(result?.messages).toBeDefined();
+    const injected = result.messages.at(-1);
+    expect(injected.role).toBe("user");
+    const text = injected.content[0].text;
+    expect(text).toContain("Task execution-state reconciliation");
+    expect(text).toContain('#1 ("Ghost task")');
+    expect(text).toContain("no tracked process or subagent is attached");
+
+    // Drained: the next context call injects nothing new.
+    const [second] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] },
+      ctx,
+    );
+    expect(second?.messages).toBeUndefined();
+  });
+
+  it("does not queue reminders for verified subagent-backed background leases", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx();
+    await mock.fireLifecycle("turn_start", {}, ctx);
+
+    // TaskExecute path: spawn RPC is answered by a fake subagents extension.
+    mock.pi.events.on("subagents:rpc:spawn", (data: any) => {
+      mock.emitEvent(`subagents:rpc:spawn:reply:${data.requestId}`, {
+        success: true,
+        data: { id: "agent-123" },
+      });
+    });
+    await mock.executeTool("TaskCreate", {
+      subject: "Real agent work",
+      description: "Delegated",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+
+    await mock.fireLifecycle("agent_end", {}, ctx);
+    const [result] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] },
+      ctx,
+    );
+    expect(result?.messages).toBeUndefined();
   });
 });
