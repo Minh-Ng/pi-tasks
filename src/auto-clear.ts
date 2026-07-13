@@ -5,7 +5,7 @@
  * - "on_task_complete": each completed task gets its own REMINDER_INTERVAL countdown, deleted individually
  * - "on_list_complete": countdown starts when ALL tasks are completed, cleared as a batch
  *
- * Both use the same turn delay (REMINDER_INTERVAL) for consistency.
+ * Both use the configured turn delay for consistency.
  */
 
 import type { TaskStore } from "./task-store.js";
@@ -21,8 +21,8 @@ export class AutoClearManager {
   constructor(
     private getStore: () => TaskStore,
     private getMode: () => AutoClearMode,
-    /** How many turns completed tasks linger before auto-clearing. */
-    private clearDelayTurns = 4,
+    /** Current number of turns completed tasks linger before auto-clearing. */
+    private getClearDelayTurns: () => number = () => 4,
   ) {}
 
   /** Record a task completion. Call AFTER cascade logic. */
@@ -64,6 +64,7 @@ export class AutoClearManager {
    */
   onTurnStart(currentTurn: number): boolean {
     const mode = this.getMode();
+    const clearDelayTurns = Math.max(1, this.getClearDelayTurns());
     let cleared = false;
 
     if (mode === "on_task_complete") {
@@ -72,14 +73,14 @@ export class AutoClearManager {
         if (!task || task.status !== "completed") {
           // Task was deleted or reverted — drop stale tracking entry
           this.completedAtTurn.delete(taskId);
-        } else if (currentTurn - turn >= this.clearDelayTurns) {
+        } else if (currentTurn - turn >= clearDelayTurns) {
           this.getStore().delete(taskId);
           this.completedAtTurn.delete(taskId);
           cleared = true;
         }
       }
     } else if (mode === "on_list_complete" && this.allCompletedAtTurn !== null) {
-      if (currentTurn - this.allCompletedAtTurn >= this.clearDelayTurns) {
+      if (currentTurn - this.allCompletedAtTurn >= clearDelayTurns) {
         this.getStore().clearCompleted();
         this.allCompletedAtTurn = null;
         cleared = true;

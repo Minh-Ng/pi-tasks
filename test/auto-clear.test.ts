@@ -234,6 +234,25 @@ describe("auto-clear: dynamic mode switching", () => {
     manager.onTurnStart(9);
     expect(store.get("1")).toBeUndefined();
   });
+
+  it("respects delay changes via getClearDelayTurns callback", () => {
+    const store = new TaskStore();
+    let delay = 8;
+    const manager = new AutoClearManager(
+      () => store,
+      () => "on_task_complete",
+      () => delay,
+    );
+    store.create("Task", "Desc");
+    store.update("1", { status: "completed" });
+    manager.trackCompletion("1", 1);
+
+    manager.onTurnStart(5);
+    expect(store.get("1")).toBeDefined();
+    delay = 4;
+    manager.onTurnStart(5);
+    expect(store.get("1")).toBeUndefined();
+  });
 });
 
 describe("auto-clear: store getter (session switch)", () => {

@@ -74,7 +74,7 @@ The widget renders phase, current operation, `completed/total` (or `completed/se
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved to `.pi/tasks-config.json`). All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings. Every setting supports a global default plus an optional project override; all built-in defaults preserve the original behaviour.
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
@@ -234,9 +234,17 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 | `on_list_complete` **(default)** | Cleared after all tasks are done and a few idle turns pass |
 | `on_task_complete` | Each completed task cleared individually after a few turns |
 
-Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
+Both auto-clear modes use the configurable `autoClearDelayTurns` delay (default: 4) for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `sortDirection` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
+### Settings scopes
+
+Every setting has two independent persistence layers:
+
+1. **global** defaults in `~/.pi/agent/tasks-config.json`
+2. **project** overrides in `<cwd>/.pi/tasks-config.json`
+3. built-in defaults when neither layer provides a value
+
+In `/tasks` → Settings, use **Editing settings** to choose the layer. `inherit` removes that layer's value: a project then inherits global, while global falls back to the built-in default. Existing project config files remain valid project overrides. `taskScope` still controls task-data storage, independently of where settings are configured.
 
 ### Override via environment variables
 
@@ -278,7 +286,7 @@ Tasks
 - **Create task** — input prompts for subject and description
 - **Clear completed** — remove all completed tasks
 - **Clear all** — remove all tasks regardless of status
-- **Settings** — configure task storage, auto-cascade, auto-clear completed tasks, and [widget display](#widget-display-settings) (sort order, max visible, show all, hidden position) — saved to `tasks-config.json`
+- **Settings** — edit global defaults or project overrides for task storage, auto-cascade, auto-clear mode/delay, and [widget display](#widget-display-settings)
 
 ## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
 
@@ -338,7 +346,7 @@ src/
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
-├── tasks-config.ts     # Config persistence (taskScope, autoCascade, autoClearCompleted) → .pi/tasks-config.json
+├── tasks-config.ts     # Layered global defaults and project setting overrides
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner

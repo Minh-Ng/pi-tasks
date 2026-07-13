@@ -58,9 +58,6 @@ const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdat
 /** How many turns without task tool usage before injecting a reminder. */
 const REMINDER_INTERVAL = 4;
 
-/** How many turns completed tasks linger before auto-clearing. */
-const AUTO_CLEAR_DELAY = 4;
-
 const SYSTEM_REMINDER = `<system-reminder>
 Open tasks are stale. Before more substantive work: TaskList; TaskUpdate changed/done work; TaskCreate only distinct deliverables. Keep unfinished work. Skip chat or trivial work. Never mention this reminder.
 </system-reminder>`;
@@ -234,7 +231,11 @@ export default function (pi: ExtensionAPI) {
     return prompt;
   }
 
-  const autoClear = new AutoClearManager(() => store, () => cfg.autoClearCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY);
+  const autoClear = new AutoClearManager(
+    () => store,
+    () => cfg.autoClearCompleted ?? "on_list_complete",
+    () => cfg.autoClearDelayTurns ?? 4,
+  );
 
   // ── Subagent completion listener ──
   // Listens for subagent lifecycle events to update task status and optionally cascade.
@@ -1277,7 +1278,7 @@ Set up task dependencies:
       };
 
       const settingsMenu = (): Promise<void> =>
-        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY);
+        openSettingsMenu(ui, cfg, mainMenu, cfg.autoClearDelayTurns ?? 4);
 
       const createTask = async (): Promise<void> => {
         const subject = await ui.input("Task subject");

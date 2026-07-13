@@ -1,16 +1,18 @@
 /**
- * settings-menu.ts — Polished settings panel for /tasks → Settings.
- *
- * Uses ui.custom() + SettingsList for native TUI rendering with keyboard
- * navigation, live toggle, and per-row descriptions — matching pi-coding-agent's
- * own settings panel style.
+ * settings-menu.ts — Settings panel with global defaults and project overrides.
  */
 
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
-import { saveTasksConfig, type TasksConfig } from "../tasks-config.js";
-
-// ── Types ───────────────────────────────────────────────────────────────────
+import {
+  getTasksConfigLayerValue,
+  type PersistedTasksConfig,
+  setTasksConfigLayerValue,
+  type TasksConfig,
+  type TasksConfigKey,
+  type TasksConfigPaths,
+  type TasksConfigScope,
+} from "../tasks-config.js";
 
 export type SettingsUI = {
   custom<T>(
@@ -19,92 +21,124 @@ export type SettingsUI = {
   ): Promise<T>;
 };
 
-// ── Settings panel ──────────────────────────────────────────────────────────
+type ConfigSetting = {
+  id: TasksConfigKey;
+  label: string;
+  description: string;
+  values: string[];
+  parse: (value: string) => PersistedTasksConfig[TasksConfigKey];
+  format?: (value: PersistedTasksConfig[TasksConfigKey]) => string;
+};
+
+const asString = (value: string) => value as PersistedTasksConfig[TasksConfigKey];
+const asBoolean = (value: string) => value === "on";
+const asNumber = (value: string) => Number(value);
+const formatBoolean = (value: PersistedTasksConfig[TasksConfigKey]) => value ? "on" : "off";
 
 export async function openSettingsMenu(
   ui: SettingsUI,
   cfg: TasksConfig,
   onBack: () => Promise<void>,
-  clearDelayTurns: number,
+  _clearDelayTurns: number,
+  configPaths: TasksConfigPaths = {},
 ): Promise<void> {
   await ui.custom((_tui, theme, _kb, done) => {
-    const items: SettingItem[] = [
+    let editingScope: TasksConfigScope = "project";
+    const settings: ConfigSetting[] = [
       {
         id: "taskScope",
         label: "Task storage",
         description:
-          "memory: tasks live only in memory, lost when session ends. " +
-          "session: persisted per session (tasks-<sessionId>.json), survives resume. " +
-          "project: shared across all sessions (tasks.json). " +
+          "memory: not persisted. session: one file per session. project: shared in the project. " +
           "Takes effect on next session start.",
-        currentValue: cfg.taskScope ?? "session",
         values: ["memory", "session", "project"],
+        parse: asString,
       },
       {
         id: "autoCascade",
         label: "Auto-execute with agents",
-        description:
-          "When ON: pending agent tasks start automatically once their dependencies complete. " +
-          "When OFF: use TaskExecute to launch them manually.",
-        currentValue: (cfg.autoCascade ?? false) ? "on" : "off",
+        description: "Automatically start pending agent tasks when dependencies complete.",
         values: ["on", "off"],
-      },
-      {
-        id: "showAll",
-        label: "Show all tasks in widget",
-        description:
-          "When ON, every task is shown regardless of the visible limit. " +
-          "When OFF, the list is capped by 'Max visible tasks'.",
-        currentValue: (cfg.showAll ?? false) ? "on" : "off",
-        values: ["on", "off"],
-      },
-      {
-        id: "maxVisible",
-        label: "Max visible tasks in widget",
-        description:
-          "Only applies when 'Show all tasks' is OFF. " +
-          "Caps how many task lines the widget shows.",
-        currentValue: String(cfg.maxVisible ?? 10),
-        values: ["5", "10", "15", "20", "30", "50", "100"],
-      },
-      {
-        id: "sortOrder",
-        label: "Widget sort order",
-        description:
-          '"status" groups by completed → in-progress → pending. ' +
-          '"id" sorts by creation order.',
-        currentValue: cfg.sortOrder ?? "id",
-        values: ["id", "status", "recent", "oldest"],
-      },
-      {
-        id: "sortDirection",
-        label: "Widget sort direction",
-        description:
-          "Ascending uses the selected sort order; descending reverses it. " +
-          'With "status", descending puts open tasks before completed tasks.',
-        currentValue: cfg.sortDirection ?? "ascending",
-        values: ["ascending", "descending"],
-      },
-      {
-        id: "hiddenAt",
-        label: "Hidden tasks position",
-        description:
-          '"bottom" hides tasks from the end of the list. ' +
-          '"top" hides tasks from the start (useful with status sort to collapse completed tasks).',
-        currentValue: cfg.hiddenAt ?? "bottom",
-        values: ["bottom", "top"],
+        parse: asBoolean,
+        format: formatBoolean,
       },
       {
         id: "autoClearCompleted",
         label: "Auto-clear completed tasks",
         description:
-          "never: completed tasks stay visible until manually cleared. " +
-          "on_list_complete: cleared automatically after all tasks are done. " +
-          "on_task_complete: each task cleared shortly after it completes. " +
-          `Clearing lags ~${clearDelayTurns} turns.`,
-        currentValue: cfg.autoClearCompleted ?? "on_list_complete",
+          "never: keep completed tasks. on_list_complete: clear when all are done. " +
+          "on_task_complete: clear each completed task.",
         values: ["never", "on_list_complete", "on_task_complete"],
+        parse: asString,
       },
+      {
+        id: "autoClearDelayTurns",
+        label: "Auto-clear delay (turns)",
+        description: "How many turns completed tasks linger before automatic clearing.",
+        values: ["1", "2", "3", "4", "5", "6", "8", "10", "12", "16"],
+        parse: asNumber,
+      },
+      {
+        id: "showAll",
+        label: "Show all tasks in widget",
+        description: "Show every task instead of applying the visible limit.",
+        values: ["on", "off"],
+        parse: asBoolean,
+        format: formatBoolean,
+      },
+      {
+        id: "maxVisible",
+        label: "Max visible tasks in widget",
+        description: "Visible task limit when 'Show all tasks' is off.",
+        values: ["5", "10", "15", "20", "30", "50", "100"],
+        parse: asNumber,
+      },
+      {
+        id: "sortOrder",
+        label: "Widget sort order",
+        description: "Sort by creation id, status, most recent update, or oldest update.",
+        values: ["id", "status", "recent", "oldest"],
+        parse: asString,
+      },
+      {
+        id: "sortDirection",
+        label: "Widget sort direction",
+        description: "Use the selected sort order ascending or descending.",
+        values: ["ascending", "descending"],
+        parse: asString,
+      },
+      {
+        id: "hiddenAt",
+        label: "Hidden tasks position",
+        description: "Choose which end of an overflowing task list is collapsed.",
+        values: ["bottom", "top"],
+        parse: asString,
+      },
+    ];
+
+    const displayedValue = (setting: ConfigSetting): string => {
+      const value = getTasksConfigLayerValue(cfg, editingScope, setting.id);
+      if (value === undefined) return "inherit";
+      return setting.format?.(value) ?? String(value);
+    };
+
+    const items: SettingItem[] = [
+      {
+        id: "settingsScope",
+        label: "Editing settings",
+        description:
+          "global sets defaults for every project; project overrides them here. " +
+          "inherit means built-in default globally or global default in a project.",
+        currentValue: editingScope,
+        values: ["global", "project"],
+      },
+      ...settings.map((setting) => ({
+        id: setting.id,
+        label: setting.label,
+        description: setting.description,
+        currentValue: displayedValue(setting),
+        values: ["inherit", ...setting.values],
+      })),
     ];
 
     const list = new SettingsList(
@@ -112,43 +146,28 @@ export async function openSettingsMenu(
       /* maxVisible */ 10,
       getSettingsListTheme(),
       /* onChange */ (id, newValue) => {
-        if (id === "autoCascade") {
-          cfg.autoCascade = newValue === "on";
-          saveTasksConfig(cfg);
+        if (id === "settingsScope") {
+          editingScope = newValue as TasksConfigScope;
+          for (const setting of settings) {
+            list.updateValue(setting.id, displayedValue(setting));
+          }
+          return;
         }
-        if (id === "taskScope") {
-          cfg.taskScope = newValue as "memory" | "session" | "project";
-          saveTasksConfig(cfg);
-        }
-        if (id === "autoClearCompleted") {
-          cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
-          saveTasksConfig(cfg);
-        }
-        if (id === "showAll") {
-          cfg.showAll = newValue === "on";
-          saveTasksConfig(cfg);
-        }
-        if (id === "maxVisible") {
-          cfg.maxVisible = Number(newValue);
-          saveTasksConfig(cfg);
-        }
-        if (id === "sortOrder") {
-          cfg.sortOrder = newValue as TasksConfig["sortOrder"];
-          saveTasksConfig(cfg);
-        }
-        if (id === "sortDirection") {
-          cfg.sortDirection = newValue as TasksConfig["sortDirection"];
-          saveTasksConfig(cfg);
-        }
-        if (id === "hiddenAt") {
-          cfg.hiddenAt = newValue as "top" | "bottom";
-          saveTasksConfig(cfg);
-        }
+
+        const setting = settings.find((candidate) => candidate.id === id);
+        if (!setting) return;
+        setTasksConfigLayerValue(
+          cfg,
+          editingScope,
+          setting.id,
+          newValue === "inherit" ? undefined : setting.parse(newValue),
+          configPaths,
+        );
+        list.updateValue(setting.id, displayedValue(setting));
       },
       /* onCancel */ () => done(undefined),
     );
 
-    // Container doesn't forward handleInput to children — subclass to fix.
     class SettingsPanel extends Container {
       handleInput(data: string) { list.handleInput(data); }
     }
@@ -157,7 +176,6 @@ export async function openSettingsMenu(
     root.addChild(new Text(theme.bold(theme.fg("accent", "⚙  Task Settings")), 0, 0));
     root.addChild(new Spacer(1));
     root.addChild(list);
-
     return root;
   });
 
