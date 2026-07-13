@@ -215,7 +215,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-`autoClearCompleted` is a global preference saved to `~/.pi/agent/tasks-config.json`, so it follows you across projects. Legacy per-project values are migrated automatically. Other settings (`taskScope`, `autoCascade`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) remain project-local in `<cwd>/.pi/tasks-config.json`.
+`autoClearCompleted` has a global default in `~/.pi/agent/tasks-config.json`, so new projects inherit your preference. A project can override that default in `<cwd>/.pi/tasks-config.json`; `/tasks` → Settings exposes both controls and can switch the project back to `use_global`. Legacy project values remain overrides and seed the global default when none exists. Other settings (`taskScope`, `autoCascade`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) remain project-local.
 
 ### Override via environment variables
 
@@ -317,7 +317,7 @@ src/
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
-├── tasks-config.ts     # Project config + global autoClearCompleted preference and migration
+├── tasks-config.ts     # Project config + global autoClearCompleted default/overrides
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner

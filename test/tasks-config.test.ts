@@ -26,9 +26,11 @@ describe("tasks config persistence", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("saves auto-clear globally while keeping other settings project-local", () => {
+  it("saves a global default while keeping other settings project-local", () => {
     saveTasksConfig({
       autoClearCompleted: "on_task_complete",
+      globalAutoClearCompleted: "on_task_complete",
+      autoClearCompletedSource: "global",
       maxVisible: 20,
       taskScope: "project",
     }, paths);
@@ -42,41 +44,74 @@ describe("tasks config persistence", () => {
     });
   });
 
-  it("loads the global auto-clear preference in another project", () => {
-    saveTasksConfig({ autoClearCompleted: "on_task_complete" }, paths);
-    const otherProject = join(root, "project-b", ".pi", "tasks-config.json");
-    mkdirSync(dirname(otherProject), { recursive: true });
-    writeFileSync(otherProject, JSON.stringify({ showAll: true }), { flag: "w" });
+  it("loads the global default in a project without an override", () => {
+    writeFileSync(paths.globalPath, JSON.stringify({
+      autoClearCompleted: "on_task_complete",
+    }));
+    writeFileSync(paths.projectPath, JSON.stringify({ showAll: true }));
 
-    expect(loadTasksConfig({ ...paths, projectPath: otherProject })).toEqual({
+    expect(loadTasksConfig(paths)).toEqual({
       showAll: true,
       autoClearCompleted: "on_task_complete",
+      globalAutoClearCompleted: "on_task_complete",
+      autoClearCompletedSource: "global",
     });
   });
 
-  it("migrates a legacy per-project auto-clear preference to global config", () => {
+  it("gives a project override precedence over the global default", () => {
+    writeFileSync(paths.globalPath, JSON.stringify({
+      autoClearCompleted: "on_task_complete",
+    }));
+    writeFileSync(paths.projectPath, JSON.stringify({
+      autoClearCompleted: "never",
+    }));
+
+    expect(loadTasksConfig(paths)).toEqual({
+      autoClearCompleted: "never",
+      globalAutoClearCompleted: "on_task_complete",
+      autoClearCompletedSource: "project",
+    });
+  });
+
+  it("seeds the global default from a legacy project value without removing its override", () => {
     writeFileSync(paths.projectPath, JSON.stringify({
       autoClearCompleted: "on_task_complete",
       sortOrder: "recent",
-    }), { flag: "w" });
+    }));
 
     expect(loadTasksConfig(paths)).toEqual({
       autoClearCompleted: "on_task_complete",
       sortOrder: "recent",
+      globalAutoClearCompleted: "on_task_complete",
+      autoClearCompletedSource: "project",
     });
     expect(readJson(paths.globalPath)).toEqual({
       autoClearCompleted: "on_task_complete",
     });
   });
 
-  it("lets the global preference override stale project values", () => {
+  it("removes a project override when switched back to the global default", () => {
     writeFileSync(paths.projectPath, JSON.stringify({
       autoClearCompleted: "never",
-    }), { flag: "w" });
+      maxVisible: 15,
+    }));
     writeFileSync(paths.globalPath, JSON.stringify({
       autoClearCompleted: "on_task_complete",
-    }), { flag: "w" });
+    }));
+    const config = loadTasksConfig(paths);
 
+    config.autoClearCompletedSource = "global";
+    config.autoClearCompleted = config.globalAutoClearCompleted;
+    saveTasksConfig(config, paths);
+
+    expect(readJson(paths.projectPath)).toEqual({ maxVisible: 15 });
     expect(loadTasksConfig(paths).autoClearCompleted).toBe("on_task_complete");
+  });
+
+  it("retains project-local behavior for callers without source metadata", () => {
+    saveTasksConfig({ autoClearCompleted: "never" }, paths);
+
+    expect(readJson(paths.projectPath)).toEqual({ autoClearCompleted: "never" });
+    expect(loadTasksConfig(paths).autoClearCompletedSource).toBe("project");
   });
 });

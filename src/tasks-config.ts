@@ -1,18 +1,24 @@
 // Project settings live at <cwd>/.pi/tasks-config.json.
-// The auto-clear preference is global so it follows the user across projects.
+// The global auto-clear default lives at ~/.pi/agent/tasks-config.json.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
+
 export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
   autoCascade?: boolean;   // default: false
-  autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
+  autoClearCompleted?: AutoClearMode;  // effective mode; default: "on_list_complete"
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
   sortOrder?: "id" | "status" | "recent" | "oldest";  // default: "id"
   hiddenAt?: "top" | "bottom";                         // default: "bottom"
+  /** Runtime settings state; persisted only in the global config. */
+  globalAutoClearCompleted?: AutoClearMode;
+  /** Runtime settings state; determines whether the project stores an override. */
+  autoClearCompletedSource?: "global" | "project";
 }
 
 export interface TasksConfigPaths {
@@ -20,7 +26,7 @@ export interface TasksConfigPaths {
   globalPath?: string;
 }
 
-const AUTO_CLEAR_MODES = new Set<TasksConfig["autoClearCompleted"]>([
+const AUTO_CLEAR_MODES = new Set<AutoClearMode>([
   "never",
   "on_list_complete",
   "on_task_complete",
@@ -46,43 +52,64 @@ function writeConfig(path: string, config: TasksConfig): void {
   writeFileSync(path, JSON.stringify(config, null, 2));
 }
 
-function isAutoClearMode(value: TasksConfig["autoClearCompleted"]): value is NonNullable<TasksConfig["autoClearCompleted"]> {
-  return AUTO_CLEAR_MODES.has(value);
+function isAutoClearMode(value: AutoClearMode | undefined): value is AutoClearMode {
+  return value !== undefined && AUTO_CLEAR_MODES.has(value);
 }
 
 export function loadTasksConfig(paths: TasksConfigPaths = {}): TasksConfig {
   const { projectPath, globalPath } = resolvePaths(paths);
   const projectConfig = readConfig(projectPath);
   const globalConfig = readConfig(globalPath);
+  const projectMode = isAutoClearMode(projectConfig.autoClearCompleted)
+    ? projectConfig.autoClearCompleted
+    : undefined;
+  let globalMode = isAutoClearMode(globalConfig.autoClearCompleted)
+    ? globalConfig.autoClearCompleted
+    : undefined;
 
-  if (isAutoClearMode(globalConfig.autoClearCompleted)) {
-    return { ...projectConfig, autoClearCompleted: globalConfig.autoClearCompleted };
-  }
-
-  // Migrate the legacy per-project preference once, then let it follow the user.
-  if (isAutoClearMode(projectConfig.autoClearCompleted)) {
+  // Seed the global default from a legacy project value without removing that
+  // project's override. Other projects can then inherit the same default.
+  if (!globalMode && projectMode) {
+    globalMode = projectMode;
     try {
       writeConfig(globalPath, {
         ...globalConfig,
-        autoClearCompleted: projectConfig.autoClearCompleted,
+        autoClearCompleted: globalMode,
       });
     } catch {
       // A read-only global config directory should not prevent the extension loading.
     }
   }
 
-  return projectConfig;
+  return {
+    ...projectConfig,
+    autoClearCompleted: projectMode ?? globalMode,
+    globalAutoClearCompleted: globalMode,
+    autoClearCompletedSource: projectMode ? "project" : "global",
+  };
 }
 
 export function saveTasksConfig(config: TasksConfig, paths: TasksConfigPaths = {}): void {
   const { projectPath, globalPath } = resolvePaths(paths);
-  const { autoClearCompleted, ...projectConfig } = config;
+  const {
+    autoClearCompleted,
+    globalAutoClearCompleted,
+    autoClearCompletedSource,
+    ...projectSettings
+  } = config;
+  const projectConfig: TasksConfig = projectSettings;
+
+  // Calls made without source metadata retain the original project-local save
+  // behavior. Settings-menu calls always provide the explicit source.
+  if (autoClearCompletedSource !== "global" && isAutoClearMode(autoClearCompleted)) {
+    projectConfig.autoClearCompleted = autoClearCompleted;
+  }
   writeConfig(projectPath, projectConfig);
 
-  if (isAutoClearMode(autoClearCompleted)) {
+  if (isAutoClearMode(globalAutoClearCompleted)) {
     writeConfig(globalPath, {
       ...readConfig(globalPath),
-      autoClearCompleted,
+      autoClearCompleted: globalAutoClearCompleted,
     });
   }
 }

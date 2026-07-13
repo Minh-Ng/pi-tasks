@@ -8,7 +8,7 @@
 
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
-import { saveTasksConfig, type TasksConfig } from "../tasks-config.js";
+import { type AutoClearMode, saveTasksConfig, type TasksConfig } from "../tasks-config.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -86,15 +86,24 @@ export async function openSettingsMenu(
         values: ["bottom", "top"],
       },
       {
-        id: "autoClearCompleted",
-        label: "Auto-clear completed tasks",
+        id: "globalAutoClearCompleted",
+        label: "Default auto-clear completed tasks",
         description:
-          "never: completed tasks stay visible until manually cleared. " +
-          "on_list_complete: cleared automatically after all tasks are done. " +
-          "on_task_complete: each task cleared shortly after it completes. " +
-          `Clearing lags ~${clearDelayTurns} turns. This preference is global across projects.`,
-        currentValue: cfg.autoClearCompleted ?? "on_list_complete",
+          "Global default for projects without an override. " +
+          "never: keep completed tasks. on_list_complete: clear when all are done. " +
+          `on_task_complete: clear each completed task after ~${clearDelayTurns} turns.`,
+        currentValue: cfg.globalAutoClearCompleted ?? "on_list_complete",
         values: ["never", "on_list_complete", "on_task_complete"],
+      },
+      {
+        id: "autoClearCompleted",
+        label: "Auto-clear in this project",
+        description:
+          "use_global: inherit the global default. Choose another value to override it only here.",
+        currentValue: cfg.autoClearCompletedSource === "project"
+          ? (cfg.autoClearCompleted ?? "on_list_complete")
+          : "use_global",
+        values: ["use_global", "never", "on_list_complete", "on_task_complete"],
       },
     ];
 
@@ -111,8 +120,21 @@ export async function openSettingsMenu(
           cfg.taskScope = newValue as "memory" | "session" | "project";
           saveTasksConfig(cfg);
         }
+        if (id === "globalAutoClearCompleted") {
+          cfg.globalAutoClearCompleted = newValue as AutoClearMode;
+          if (cfg.autoClearCompletedSource !== "project") {
+            cfg.autoClearCompleted = cfg.globalAutoClearCompleted;
+          }
+          saveTasksConfig(cfg);
+        }
         if (id === "autoClearCompleted") {
-          cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
+          if (newValue === "use_global") {
+            cfg.autoClearCompletedSource = "global";
+            cfg.autoClearCompleted = cfg.globalAutoClearCompleted ?? "on_list_complete";
+          } else {
+            cfg.autoClearCompletedSource = "project";
+            cfg.autoClearCompleted = newValue as AutoClearMode;
+          }
           saveTasksConfig(cfg);
         }
         if (id === "showAll") {
