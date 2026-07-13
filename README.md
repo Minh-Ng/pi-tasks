@@ -14,8 +14,8 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
 - **Persistent widget** — live task list above the editor with distinct foreground (`✳✽`), background (`◐◓◑◒`), claimed (`◼`), pending (`◻`), and completed (`✔`) states. Timers run only while the current extension runtime holds a live execution lease.
-- **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
-- **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
+- **System-reminder injection** — transient `<system-reminder>` nudges injected into the upcoming LLM request via the `context` hook: immediately after user steering/follow-ups, and periodically when task tools have not been used recently. A mid-stream steer with no open task prompts the agent to capture the interrupted primary work first. Reminders are never persisted.
+- **Prompt guidelines** — steering becomes a task checkpoint, not a forced interruption: the agent may handle or queue it, avoids per-message task churn, and resumes required work before stopping
 - **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
 - **Shared task lists** — multiple pi sessions can share a file-backed task list for agent team coordination
 - **File locking** — concurrent access is safe when multiple sessions share a task list

@@ -1081,6 +1081,127 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
   });
 });
 
+describe("Task prompting during user steering", () => {
+  it("surfaces steering guidance in the system prompt metadata", () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    const taskCreate = mock.tools.get("TaskCreate");
+    const guidelines = taskCreate.promptGuidelines.join("\n");
+    expect(taskCreate.promptSnippet).toContain("reconcile steering");
+    expect(guidelines).toContain("steering/corrections/follow-ups/tangents");
+    expect(guidelines).toContain("may run now or be queued");
+    expect(guidelines).toContain("Do not task quick questions");
+    expect(guidelines).toContain("Before final");
+    expect(guidelines).toContain("this run");
+    expect(guidelines).toContain("shared across agents");
+    expect(guidelines.length).toBeLessThan(1000);
+  });
+
+  it("injects one immediate checkpoint after user input when unfinished tasks exist", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx();
+    await mock.executeTool("TaskCreate", {
+      subject: "Original work",
+      description: "Keep this work visible while steering",
+    });
+
+    await mock.fireLifecycle(
+      "input",
+      { text: "Also investigate the tangent", source: "interactive", streamingBehavior: "steer" },
+      ctx,
+    );
+    const [result] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "Also investigate the tangent" }] }] },
+      ctx,
+    );
+
+    const text = result.messages.at(-1).content[0].text;
+    expect(text).toContain("as a checkpoint");
+    expect(text).toContain("TaskList");
+    expect(text).toContain("not quick questions or one task per message");
+    expect(text).toContain("Handle the steer now or queue it");
+    expect(text).toContain("Before final");
+    expect(text).toContain("in this run");
+    expect(text).toContain("TaskExecute owns");
+
+    const [second] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "continue" }] }] },
+      ctx,
+    );
+    expect(second?.messages).toBeUndefined();
+  });
+
+  it("captures untracked primary work when a mid-stream steer arrives", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx();
+
+    await mock.fireLifecycle(
+      "input",
+      { text: "What about xyz?", source: "interactive", streamingBehavior: "steer" },
+      ctx,
+    );
+    const [result] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "What about xyz?" }] }] },
+      ctx,
+    );
+
+    const text = result.messages.at(-1).content[0].text;
+    expect(text).toContain("with no open task");
+    expect(text).toContain("TaskCreate the interrupted primary outcome");
+    expect(text).toContain("Track the steer separately only if actionable");
+    expect(text).toContain("Handle it now or queue it");
+    expect(text).toContain("resume the primary in this run");
+    expect(text).toContain("Do not stop merely because the steer is done");
+  });
+
+  it("does not inject checkpoints without unfinished work", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx();
+    await mock.executeTool("TaskCreate", { subject: "Done", description: "Already complete" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+
+    await mock.fireLifecycle(
+      "input",
+      { text: "Thanks", source: "interactive", streamingBehavior: undefined },
+      ctx,
+    );
+    const [result] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "Thanks" }] }] },
+      ctx,
+    );
+
+    expect(result?.messages).toBeUndefined();
+  });
+
+  it("ignores extension-authored follow-ups to avoid self-triggering", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx();
+    await mock.executeTool("TaskCreate", { subject: "Open", description: "Still open" });
+
+    await mock.fireLifecycle(
+      "input",
+      { text: "Automated follow-up", source: "extension", streamingBehavior: "followUp" },
+      ctx,
+    );
+    const [result] = await mock.fireLifecycle(
+      "context",
+      { messages: [{ role: "user", content: [{ type: "text", text: "Automated follow-up" }] }] },
+      ctx,
+    );
+
+    expect(result?.messages).toBeUndefined();
+  });
+});
+
 describe("Execution-state reconciliation", () => {
   async function setupWithStaleBackgroundLease() {
     const mock = mockPi();

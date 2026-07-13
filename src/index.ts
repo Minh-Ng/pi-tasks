@@ -62,7 +62,19 @@ const REMINDER_INTERVAL = 4;
 const AUTO_CLEAR_DELAY = 4;
 
 const SYSTEM_REMINDER = `<system-reminder>
-The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress with foreground only during active main-thread work, background only for a real running process/agent, and completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user
+Open tasks are stale. Before more substantive work: TaskList; TaskUpdate changed/done work; TaskCreate only distinct deliverables. Keep unfinished work. Skip chat or trivial work. Never mention this reminder.
+</system-reminder>`;
+
+const INPUT_CHECKPOINT_REMINDER = `<system-reminder>
+New user input while tasks remain. Treat steering/corrections/follow-ups/tangents as a checkpoint:
+- TaskList. Update the same outcome; create only distinct actionable work, not quick questions or one task per message.
+- Handle the steer now or queue it and finish current work; prefer the safer flow unless it is urgent or invalidates current work.
+- If switching, leave interrupted work pending/unowned unless truly running in background.
+Before final, TaskList and resume required runnable work in this run. Stop only when it is done, blocked, truly backgrounded, or the user paused/cancelled it. TaskExecute owns its agents' lifecycle. Never mention this reminder.
+</system-reminder>`;
+
+const UNTRACKED_INTERRUPTION_REMINDER = `<system-reminder>
+Mid-stream steer/follow-up with no open task. Before switching, TaskCreate the interrupted primary outcome and remaining criteria. Track the steer separately only if actionable. Handle it now or queue it; resume the primary in this run unless cancelled, paused, or superseded. Do not stop merely because the steer is done. Never mention this reminder.
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
@@ -331,6 +343,8 @@ export default function (pi: ExtensionAPI) {
   // Cadence decisions live in `reminder-cadence.ts` so they're
   // unit-testable without spinning up a fake ExtensionAPI.
   const cadence = createCadenceState();
+  let inputCheckpointDue = false;
+  let untrackedInterruptionDue = false;
   const cadenceConfig: CadenceConfig = {
     reminderInterval: REMINDER_INTERVAL,
     taskToolNames: TASK_TOOL_NAMES,
@@ -342,6 +356,21 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
     if (autoClear.onTurnStart(cadence.currentTurn)) widget.update();
+  });
+
+  // Every human/API message is a task-state checkpoint while unfinished work
+  // exists. Queueing here catches ordinary prompts, mid-stream steering, and
+  // queued follow-ups; the context hook drains it exactly once before the next
+  // model call. Extension-authored messages are excluded to avoid self-triggering.
+  pi.on("input", async (event) => {
+    if (event.source !== "extension") {
+      if (store.list().some(task => task.status !== "completed")) {
+        inputCheckpointDue = true;
+      } else if (event.streamingBehavior === "steer" || event.streamingBehavior === "followUp") {
+        untrackedInterruptionDue = true;
+      }
+    }
+    return { action: "continue" as const };
   });
 
   // ── Agent run lifecycle → execution-state truth ──
@@ -408,7 +437,9 @@ export default function (pi: ExtensionAPI) {
     }
     if (!isTaskTool && cadence.reminderInjectedThisCycle) return {};
 
-    const hasTasks = isTaskTool ? false : store.list().length > 0;
+    const hasTasks = isTaskTool
+      ? false
+      : store.list().some(task => task.status !== "completed");
     evaluateToolResult(cadence, event.toolName, hasTasks, cadenceConfig);
     return {};
   });
@@ -420,6 +451,14 @@ export default function (pi: ExtensionAPI) {
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
     const reminders: string[] = [];
+    if (untrackedInterruptionDue) {
+      reminders.push(UNTRACKED_INTERRUPTION_REMINDER);
+      untrackedInterruptionDue = false;
+    }
+    if (inputCheckpointDue) {
+      reminders.push(INPUT_CHECKPOINT_REMINDER);
+      inputCheckpointDue = false;
+    }
     if (drainReminderForContext(cadence)) reminders.push(SYSTEM_REMINDER);
     if (pendingStateNotices.length > 0) {
       reminders.push(
@@ -481,6 +520,8 @@ export default function (pi: ExtensionAPI) {
     storeUpgraded = false;
     persistedTasksShown = false;
     resetCadenceState(cadence);
+    inputCheckpointDue = false;
+    untrackedInterruptionDue = false;
     autoClear.reset();
 
     // Memory mode has no file-backed store to switch — clear explicitly on /new
@@ -519,7 +560,7 @@ Use this tool proactively in these scenarios:
 - Plan mode - When using plan mode, create a task list to track the work
 - User explicitly requests todo list - When the user directly asks you to use the todo list
 - User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
-- After receiving new instructions - Immediately capture user requirements as tasks
+- Steering changes work - Reconcile actionable follow-ups, corrections, or tangents with TaskList, then update/create before substantive work. No explicit request is needed.
 - When you start working on a task - Mark it in_progress with executionMode foreground BEFORE beginning active main-thread work
 - After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
 
@@ -531,7 +572,7 @@ Skip using this tool when:
 - The task can be completed in less than 3 trivial steps
 - The task is purely conversational or informational
 
-NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+Do not track one trivial action or create one task per message. Update the existing task when its outcome is unchanged; create only distinct deliverables.
 
 ## Task Fields
 
@@ -548,11 +589,14 @@ All tasks are created with status \`pending\`.
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
 - Check TaskList first to avoid creating duplicate tasks
 - Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
+    promptSnippet: "Maintain shared tasks; reconcile steering before substantive work",
     promptGuidelines: [
-      "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
-      "Use executionMode foreground only during active main-thread work and background only for a real running process or agent.",
-      "Mark tasks as in_progress before starting work and completed when done.",
-      "Use TaskList to check for available work after completing a task.",
+      "For multi-step work, TaskCreate the primary outcome before substantive action and keep status current.",
+      "Treat steering/corrections/follow-ups/tangents as checkpoints: TaskList, then update the same outcome or create distinct actionable work. No explicit tracking request is needed.",
+      "A steer may run now or be queued while current work finishes; choose the safer flow unless it is urgent or invalidates current work.",
+      "Do not task quick questions or create one task per message. Before final, TaskList and resume required runnable work in this run; stop only if done, blocked, truly backgrounded, or user-paused/cancelled.",
+      "Tasks are shared across agents using the same session/list; pi-tasks owns TaskExecute agent lifecycle.",
+      "Use foreground only for active main-thread work, background only for real processes/agents, and complete only finished work.",
     ],
     parameters: Type.Object({
       subject: Type.String({ description: "A brief title for the task" }),
