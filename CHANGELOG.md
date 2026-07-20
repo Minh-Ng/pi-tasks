@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Explicit execution modes and live leases.** `TaskUpdate.executionMode` distinguishes `foreground`, `background`, and `none` (claimed/unmonitored). The widget uses separate foreground and background spinners and labels background owners directly.
 - **Bounded background progress rendering.** Live background rows display the documented `metadata.progress` contract (phase, operation, counts, and last-activity health) while stripping controls, bounding labels, and ignoring arbitrary metadata.
 
+### Changed
+- **Task execution now uses a runtime-neutral adapter hook.** pi-tasks no longer names or requires a bundled subagent package. `TaskExecute` discovers an optional executor over the versioned `task-executor:*` event-bus contract; without an adapter it leaves the task pending and directs the caller to use Pi's `Agent` tool with manual task-state updates. `agentType`, dependency-result injection, lifecycle tracking, and auto-cascade remain available for a future adapter.
+
 ### Fixed
 - **In-progress no longer falsely implies active work.** A status transition alone does not start a timer. Timers and animation require a live execution lease in the current extension runtime; persisted/reloaded modes render as unmonitored without ticking.
 

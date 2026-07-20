@@ -8,7 +8,7 @@
  *   TaskUpdate   — Update task fields, status, dependencies
  *   TaskOutput   — Get output from a background task process
  *   TaskStop     — Stop a running background task process
- *   TaskExecute  — Execute tasks as subagents (requires @tintinweb/pi-subagents)
+ *   TaskExecute  — Execute tasks through an optional task-executor adapter
  *
  * Commands:
  *   /tasks       — Interactive task management menu
@@ -126,14 +126,28 @@ export default function (pi: ExtensionAPI) {
   /** Maps agent IDs to task IDs for O(1) completion lookup. */
   const agentTaskMap = new Map<string, string>();
 
-  // ── Subagent RPC helpers ──
+  // ── Optional task-executor hook ──
 
   /** RPC reply envelope — matches pi-mono's RpcResponse shape. */
   type RpcReply<T = void> =
     | { success: true; data?: T }
     | { success: false; error: string };
 
-  /** Call a subagents RPC method: emit request, wait for scoped reply, unwrap envelope. */
+  const TASK_EXECUTOR_PROTOCOL_VERSION = 1;
+  const TASK_EXECUTOR_CHANNELS = {
+    ping: "task-executor:rpc:ping",
+    spawn: "task-executor:rpc:spawn",
+    stop: "task-executor:rpc:stop",
+    ready: "task-executor:ready",
+    completed: "task-executor:completed",
+    failed: "task-executor:failed",
+  } as const;
+
+  // TODO: Provide a separate executor adapter extension. pi-tasks owns task state
+  // and this neutral event-bus contract, but deliberately bundles no subagent runtime.
+  // An adapter responds to ping/spawn/stop and emits completed/failed lifecycle events.
+
+  /** Call a task-executor RPC method: emit request, wait for scoped reply, unwrap envelope. */
   function rpcCall<T>(channel: string, params: Record<string, unknown>, timeoutMs: number): Promise<T> {
     const requestId = randomUUID();
     debug(`rpc:send ${channel}`, { requestId });
@@ -155,50 +169,42 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  /** Spawn a subagent via pi.events RPC (requires @tintinweb/pi-subagents extension). */
   function spawnSubagent(type: string, prompt: string, options?: any): Promise<string> {
     debug("spawn:call", { type, options: { ...options, prompt: undefined } });
-    return rpcCall<{ id: string }>("subagents:rpc:spawn", { type, prompt, options }, 30_000)
+    return rpcCall<{ id: string }>(TASK_EXECUTOR_CHANNELS.spawn, { type, prompt, options }, 30_000)
       .then(d => { debug("spawn:ok", d); return d.id; });
   }
 
-  /** Stop a subagent via pi.events RPC (requires @tintinweb/pi-subagents extension). */
   function stopSubagent(agentId: string): Promise<void> {
-    return rpcCall<void>("subagents:rpc:stop", { agentId }, 10_000).catch(() => {});
+    return rpcCall<void>(TASK_EXECUTOR_CHANNELS.stop, { agentId }, 10_000).catch(() => {});
   }
 
-  // ── Subagent extension presence & version detection ──
-  const PROTOCOL_VERSION = 2;
-  let subagentsAvailable = false;
+  let taskExecutorAvailable = false;
   let pendingWarning: string | undefined;
 
-  /** Ping subagents and check protocol version. Works with any handler version. */
-  function checkSubagentsVersion() {
+  function checkTaskExecutorVersion() {
+    taskExecutorAvailable = false;
     const requestId = randomUUID();
     const timer = setTimeout(() => { unsub(); }, 5_000);
-    const unsub = pi.events.on(`subagents:rpc:ping:reply:${requestId}`, (raw: unknown) => {
+    const unsub = pi.events.on(`${TASK_EXECUTOR_CHANNELS.ping}:reply:${requestId}`, (raw: unknown) => {
       unsub(); clearTimeout(timer);
       const remoteVersion = (raw as any)?.data?.version as number | undefined;
       if (remoteVersion === undefined) {
+        pendingWarning = "The registered task executor does not advertise a protocol version.";
+      } else if (remoteVersion !== TASK_EXECUTOR_PROTOCOL_VERSION) {
         pendingWarning =
-          "@tintinweb/pi-subagents is outdated — please update for task execution support.";
-      } else if (remoteVersion > PROTOCOL_VERSION) {
-        pendingWarning =
-          `@tintinweb/pi-tasks is outdated (protocol v${PROTOCOL_VERSION}, ` +
-          `pi-subagents has v${remoteVersion}) — please update for task execution support.`;
-      } else if (remoteVersion < PROTOCOL_VERSION) {
-        pendingWarning =
-          `@tintinweb/pi-subagents is outdated (protocol v${remoteVersion}, ` +
-          `pi-tasks has v${PROTOCOL_VERSION}) — please update for task execution support.`;
+          `Task executor protocol mismatch (pi-tasks v${TASK_EXECUTOR_PROTOCOL_VERSION}, ` +
+          `executor v${remoteVersion}).`;
       } else {
-        subagentsAvailable = true;
+        pendingWarning = undefined;
+        taskExecutorAvailable = true;
       }
     });
-    pi.events.emit("subagents:rpc:ping", { requestId });
+    pi.events.emit(TASK_EXECUTOR_CHANNELS.ping, { requestId });
   }
 
-  checkSubagentsVersion();
-  pi.events.on("subagents:ready", () => checkSubagentsVersion());
+  checkTaskExecutorVersion();
+  pi.events.on(TASK_EXECUTOR_CHANNELS.ready, () => checkTaskExecutorVersion());
 
   /** Build a prompt for a task being executed by a subagent.
    *  Injects completed dependency results so cascaded agents have context from prerequisites.
@@ -237,11 +243,11 @@ export default function (pi: ExtensionAPI) {
     () => cfg.autoClearDelayTurns ?? 4,
   );
 
-  // ── Subagent completion listener ──
-  // Listens for subagent lifecycle events to update task status and optionally cascade.
+  // ── Task-executor completion listener ──
+  // Listens for adapter lifecycle events to update task status and optionally cascade.
 
   // Success → mark task completed, cascade if enabled
-  pi.events.on("subagents:completed", async (data) => {
+  pi.events.on(TASK_EXECUTOR_CHANNELS.completed, async (data) => {
     const { id, result } = data as { id: string; result?: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
@@ -284,7 +290,7 @@ export default function (pi: ExtensionAPI) {
 
   // Failure → store error, revert to pending, don't cascade (branch stops)
   // Intentional stop (status === "stopped") → mark completed, preserve partial result
-  pi.events.on("subagents:failed", (data) => {
+  pi.events.on(TASK_EXECUTOR_CHANNELS.failed, (data) => {
     const { id, error, result, status } = data as { id: string; error?: string; result?: string; status: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
@@ -958,10 +964,10 @@ Set up task dependencies:
             await new Promise<void>((resolve) => {
               const timer = setTimeout(() => { unsubOk(); unsubFail(); resolve(); }, timeout ?? 30000);
               const cleanup = () => { clearTimeout(timer); resolve(); };
-              const unsubOk = pi.events.on("subagents:completed", (d: unknown) => {
+              const unsubOk = pi.events.on(TASK_EXECUTOR_CHANNELS.completed, (d: unknown) => {
                 if ((d as any).id === task.metadata?.agentId) { unsubOk(); unsubFail(); cleanup(); }
               });
-              const unsubFail = pi.events.on("subagents:failed", (d: unknown) => {
+              const unsubFail = pi.events.on(TASK_EXECUTOR_CHANNELS.failed, (d: unknown) => {
                 if ((d as any).id === task.metadata?.agentId) { unsubOk(); unsubFail(); cleanup(); }
               });
               // Re-check in case status changed between the outer check and listener registration
@@ -1074,11 +1080,10 @@ Set up task dependencies:
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      if (!subagentsAvailable) {
+      if (!taskExecutorAvailable) {
         return textResult(
-          "Subagent execution is currently unavailable (@tintinweb/pi-subagents not loaded " +
-          "or version mismatch). You can run these as plain Agent-tool spawns, but pi-tasks " +
-          "won't track them — status stays pending, cascade won't fire, TaskOutput stays empty."
+          "No task-executor adapter is registered. Use the Agent tool directly and update task state " +
+          "manually; pi-tasks preserves agentType metadata for a future executor hook."
         );
       }
 

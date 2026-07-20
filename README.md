@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 - **Shared task lists** — multiple pi sessions can share a file-backed task list for agent team coordination
 - **File locking** — concurrent access is safe when multiple sessions share a task list
 - **Background process tracking** — track spawned processes with output buffering, blocking wait, and graceful stop
-- **Subagent integration** — tasks with `agentType` can be executed as subagents via `TaskExecute` (requires [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents)). Auto-cascade mode flows through the task DAG automatically when enabled.
+- **Optional task-executor hook** — `agentType` metadata and `TaskExecute` are runtime-neutral. pi-tasks bundles no subagent implementation; a future adapter can implement the documented event-bus contract and enable tracked execution and auto-cascade.
 
 ## Install
 
@@ -174,7 +174,7 @@ Both task IDs and agent IDs (including partial prefixes) are accepted — agent 
 
 ### `TaskStop`
 
-Stop a running background task process. Sends SIGTERM, waits 5 seconds, then SIGKILL. For subagent tasks, sends a stop RPC.
+Stop a running background task process. Sends SIGTERM, waits 5 seconds, then SIGKILL. For adapter-executed tasks, sends a stop RPC through the task-executor hook.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -182,7 +182,7 @@ Stop a running background task process. Sends SIGTERM, waits 5 seconds, then SIG
 
 ### `TaskExecute`
 
-Execute one or more tasks as background subagents. Requires [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents).
+Execute one or more tasks through an optional task-executor adapter. No executor runtime is bundled; without a registered adapter, use Pi's `Agent` tool directly and update task state manually.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -288,61 +288,36 @@ Tasks
 - **Clear all** — remove all tasks regardless of status
 - **Settings** — edit global defaults or project overrides for task storage, auto-cascade, auto-clear mode/delay, and [widget display](#widget-display-settings)
 
-## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
+## Optional Task-executor Hook
 
-[`pi-tasks`](https://github.com/tintinweb/pi-tasks) communicates with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) via pi's eventbus using a scoped request/reply RPC protocol. No shared global state — just events.
+pi-tasks deliberately bundles no subagent runtime. It exposes a versioned Pi event-bus contract so a separate executor adapter can provide tracked task execution later without coupling task storage to one agent implementation.
 
-### Presence Detection
+> **TODO:** implement or select a task-executor adapter. Until then, use Pi's `Agent` tool directly and keep task ownership/status current manually.
 
-Load order doesn't matter. Two handshake paths ensure detection regardless of which extension loads first:
+### Adapter Contract (v1)
 
-1. **Ping on init** — [`pi-tasks`](https://github.com/tintinweb/pi-tasks) emits `subagents:rpc:ping` with a unique `requestId` and listens for `subagents:rpc:ping:reply:{requestId}`. If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is already loaded, it replies immediately.
-2. **Ready broadcast** — [`pi-subagents`](https://github.com/tintinweb/pi-subagents) emits `subagents:ready` when it initializes. If [`pi-tasks`](https://github.com/tintinweb/pi-tasks) loaded first, it picks this up.
+An adapter announces readiness with `task-executor:ready` and responds to scoped RPC requests using `{ success: true, data? }` or `{ success: false, error }` envelopes:
 
-```
-┌─────────────┐                    ┌──────────────────┐
-│  pi-tasks   │                    │  pi-subagents    │
-└──────┬──────┘                    └────────┬─────────┘
-       │                                    │
-       │──── subagents:rpc:ping ───────────▶│
-       │◀─── subagents:rpc:ping:reply ──────│
-       │                                    │
-       │◀─── subagents:ready ───────────────│  (broadcast on init)
-       │                                    │
-```
+| Request event | Payload | Successful `data` |
+|---------------|---------|-------------------|
+| `task-executor:rpc:ping` | `{ requestId }` | `{ version: 1 }` |
+| `task-executor:rpc:spawn` | `{ requestId, type, prompt, options }` | `{ id }` |
+| `task-executor:rpc:stop` | `{ requestId, agentId }` | none |
 
-### Spawning Subagents
+Replies use `<request-event>:reply:<requestId>`. The adapter emits lifecycle events after spawning:
 
-When `TaskExecute` runs, it sends a spawn RPC with a scoped reply channel:
+| Lifecycle event | Payload | pi-tasks action |
+|-----------------|---------|-----------------|
+| `task-executor:completed` | `{ id, result? }` | Mark the task completed and optionally cascade |
+| `task-executor:failed` | `{ id, error?, result?, status }` | Revert to pending, or complete an intentional stop |
 
-```
-pi-tasks                                pi-subagents
-   │                                         │
-   │── subagents:rpc:spawn ─────────────────▶│  { requestId, type, prompt, options }
-   │◀─ subagents:rpc:spawn:reply:{reqId} ───│  { id }  (or { error })
-   │                                         │
-```
-
-The returned `id` is stored in an in-memory `agentTaskMap` (agentId → taskId) for O(1) completion lookup. A 30-second timeout rejects the Promise if no reply arrives.
-
-### Lifecycle Events
-
-[`pi-subagents`](https://github.com/tintinweb/pi-subagents) emits lifecycle events that [`pi-tasks`](https://github.com/tintinweb/pi-tasks) listens to:
-
-| Event | Payload | Action |
-|-------|---------|--------|
-| `subagents:completed` | `{ id, result? }` | Mark task `completed`, trigger auto-cascade if enabled |
-| `subagents:failed` | `{ id, error?, status }` | Revert task to `pending`, store error in metadata |
-
-### Standalone Mode
-
-If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is not installed, everything works except `TaskExecute`, which returns a friendly message explaining the agent can fall back to plain Agent-tool spawns — with the caveat that pi-tasks won't track those (status stays `pending`, auto-cascade won't fire, `TaskOutput` stays empty). All core task tools (create, list, get, update, dependencies, widget, system-reminder injection) function independently.
+Load order is neutral: pi-tasks pings on initialization and again whenever an adapter emits `task-executor:ready`. A protocol mismatch disables `TaskExecute` and surfaces one compatibility warning.
 
 ## Architecture
 
 ```
 src/
-├── index.ts            # Extension entry: 7 tools + /tasks command + widget + subagent integration
+├── index.ts            # Extension entry: 7 tools + /tasks command + optional executor hook
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)

@@ -137,48 +137,48 @@ describe("Session task rehydration", () => {
   });
 });
 
-// ---- Mock subagents extension (RPC responders) ----
+// ---- Mock task-executor adapter (RPC responders) ----
 
-/** Simulates the @tintinweb/pi-subagents extension: responds to ping + spawn RPCs and emits ready. */
-function installSubagentsMock(pi: { events: MockEventBus }, opts?: { spawnError?: string }) {
+/** Simulates a task-executor adapter: responds to ping + spawn RPCs and emits ready. */
+function installTaskExecutorMock(pi: { events: MockEventBus }, opts?: { spawnError?: string }) {
   let idCounter = 0;
   const spawned: Array<{ id: string; type: string; prompt: string; options: any }> = [];
   const stopped: string[] = [];
 
   // Respond to ping — reply on scoped channel
-  const unsubPing = pi.events.on("subagents:rpc:ping", (data: unknown) => {
+  const unsubPing = pi.events.on("task-executor:rpc:ping", (data: unknown) => {
     const { requestId } = data as { requestId: string };
-    pi.events.emit(`subagents:rpc:ping:reply:${requestId}`, { success: true, data: { version: 2 } });
+    pi.events.emit(`task-executor:rpc:ping:reply:${requestId}`, { success: true, data: { version: 1 } });
   });
 
   // Respond to spawn — reply on scoped channel
-  const unsubSpawn = pi.events.on("subagents:rpc:spawn", (data: unknown) => {
+  const unsubSpawn = pi.events.on("task-executor:rpc:spawn", (data: unknown) => {
     const { requestId, type, prompt, options } = data as {
       requestId: string; type: string; prompt: string; options?: any;
     };
     if (opts?.spawnError) {
-      pi.events.emit(`subagents:rpc:spawn:reply:${requestId}`, { success: false, error: opts.spawnError });
+      pi.events.emit(`task-executor:rpc:spawn:reply:${requestId}`, { success: false, error: opts.spawnError });
       return;
     }
     const id = `agent-${++idCounter}`;
     spawned.push({ id, type, prompt, options });
-    pi.events.emit(`subagents:rpc:spawn:reply:${requestId}`, { success: true, data: { id } });
+    pi.events.emit(`task-executor:rpc:spawn:reply:${requestId}`, { success: true, data: { id } });
   });
 
   // Respond to stop — reply on scoped channel
-  const unsubStop = pi.events.on("subagents:rpc:stop", (data: unknown) => {
+  const unsubStop = pi.events.on("task-executor:rpc:stop", (data: unknown) => {
     const { requestId, agentId } = data as { requestId: string; agentId: string };
     const known = spawned.some(s => s.id === agentId);
     if (known) {
       stopped.push(agentId);
-      pi.events.emit(`subagents:rpc:stop:reply:${requestId}`, { success: true });
+      pi.events.emit(`task-executor:rpc:stop:reply:${requestId}`, { success: true });
     } else {
-      pi.events.emit(`subagents:rpc:stop:reply:${requestId}`, { success: false, error: "Agent not found" });
+      pi.events.emit(`task-executor:rpc:stop:reply:${requestId}`, { success: false, error: "Agent not found" });
     }
   });
 
   // Broadcast readiness
-  pi.events.emit("subagents:ready", {});
+  pi.events.emit("task-executor:ready", {});
 
   return {
     spawned,
@@ -191,12 +191,12 @@ function installSubagentsMock(pi: { events: MockEventBus }, opts?: { spawnError?
 
 describe("TaskExecute", () => {
   let mock: ReturnType<typeof mockPi>;
-  let rpc: ReturnType<typeof installSubagentsMock>;
+  let rpc: ReturnType<typeof installTaskExecutorMock>;
 
   beforeEach(() => {
     mock = mockPi();
     // Install mock BEFORE init so ping reply is received during extension init
-    rpc = installSubagentsMock(mock.pi);
+    rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
   });
 
@@ -208,8 +208,8 @@ describe("TaskExecute", () => {
     expect(mock.tools.has("TaskExecute")).toBe(true);
   });
 
-  it("returns error when subagent extension is not loaded", async () => {
-    // Re-init without mock to simulate missing extension
+  it("reports when no task-executor adapter is registered", async () => {
+    // Re-initialize without an executor adapter
     const freshMock = mockPi();
     initExtension(freshMock.pi as any);
 
@@ -220,7 +220,7 @@ describe("TaskExecute", () => {
     });
 
     const result = await freshMock.executeTool("TaskExecute", { task_ids: ["1"] });
-    expect(result.content[0].text).toContain("Subagent execution is currently unavailable");
+    expect(result.content[0].text).toContain("No task-executor adapter is registered");
   });
 
   it("rejects non-existent tasks", async () => {
@@ -345,8 +345,8 @@ describe("TaskExecute via ready broadcast", () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    // Now install the mock (simulates subagents loading later) and broadcast ready
-    const rpc = installSubagentsMock(mock.pi);
+    // Register an executor adapter after pi-tasks and broadcast readiness
+    const rpc = installTaskExecutorMock(mock.pi);
 
     // Create a task and execute — should work because ready was received
     await mock.executeTool("TaskCreate", {
@@ -365,11 +365,11 @@ describe("TaskExecute via ready broadcast", () => {
 
 describe("Completion listener", () => {
   let mock: ReturnType<typeof mockPi>;
-  let rpc: ReturnType<typeof installSubagentsMock>;
+  let rpc: ReturnType<typeof installTaskExecutorMock>;
 
   beforeEach(() => {
     mock = mockPi();
-    rpc = installSubagentsMock(mock.pi);
+    rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
   });
 
@@ -377,7 +377,7 @@ describe("Completion listener", () => {
     rpc.unsub();
   });
 
-  it("marks task completed on subagents:completed event", async () => {
+  it("marks task completed on task-executor:completed event", async () => {
     await mock.executeTool("TaskCreate", {
       subject: "Agent task",
       description: "Desc",
@@ -386,13 +386,13 @@ describe("Completion listener", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     // Simulate agent completion
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    mock.emitEvent("task-executor:completed", { id: "agent-1" });
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: completed");
   });
 
-  it("reverts task to pending on subagents:failed event", async () => {
+  it("reverts task to pending on task-executor:failed event", async () => {
     await mock.executeTool("TaskCreate", {
       subject: "Failing task",
       description: "Desc",
@@ -401,7 +401,7 @@ describe("Completion listener", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     // Simulate agent failure
-    mock.emitEvent("subagents:failed", { id: "agent-1", error: "Out of turns", status: "error" });
+    mock.emitEvent("task-executor:failed", { id: "agent-1", error: "Out of turns", status: "error" });
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: pending");
@@ -414,8 +414,8 @@ describe("Completion listener", () => {
     });
 
     // Should not throw or modify anything
-    mock.emitEvent("subagents:completed", { id: "unknown-agent" });
-    mock.emitEvent("subagents:failed", { id: "unknown-agent", error: "boom", status: "error" });
+    mock.emitEvent("task-executor:completed", { id: "unknown-agent" });
+    mock.emitEvent("task-executor:failed", { id: "unknown-agent", error: "boom", status: "error" });
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: pending");
@@ -424,11 +424,11 @@ describe("Completion listener", () => {
 
 describe("Auto-cascade", () => {
   let mock: ReturnType<typeof mockPi>;
-  let rpc: ReturnType<typeof installSubagentsMock>;
+  let rpc: ReturnType<typeof installTaskExecutorMock>;
 
   beforeEach(() => {
     mock = mockPi();
-    rpc = installSubagentsMock(mock.pi);
+    rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
   });
 
@@ -455,7 +455,7 @@ describe("Auto-cascade", () => {
     expect(rpc.spawned).toHaveLength(1);
 
     // Complete A
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    mock.emitEvent("task-executor:completed", { id: "agent-1" });
 
     // B should NOT have been auto-started
     expect(rpc.spawned).toHaveLength(1);
@@ -479,7 +479,7 @@ describe("Auto-cascade", () => {
     await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
 
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    mock.emitEvent("subagents:failed", { id: "agent-1", error: "crashed", status: "error" });
+    mock.emitEvent("task-executor:failed", { id: "agent-1", error: "crashed", status: "error" });
 
     // B should not start
     expect(rpc.spawned).toHaveLength(1);
@@ -501,7 +501,7 @@ describe("Auto-cascade", () => {
     await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
 
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    mock.emitEvent("task-executor:completed", { id: "agent-1" });
 
     // Manual task should stay pending
     expect(rpc.spawned).toHaveLength(1);
@@ -509,11 +509,11 @@ describe("Auto-cascade", () => {
 });
 
 
-describe("Standalone operation (no subagents extension)", () => {
+describe("Standalone operation (no task-executor adapter)", () => {
   let mock: ReturnType<typeof mockPi>;
 
   beforeEach(() => {
-    // Init WITHOUT installSubagentsMock — no subagents extension present
+    // Initialize without an executor adapter
     mock = mockPi();
     initExtension(mock.pi as any);
   });
@@ -524,7 +524,7 @@ describe("Standalone operation (no subagents extension)", () => {
     }
   });
 
-  it("TaskCreate works without subagents", async () => {
+  it("TaskCreate works without an executor adapter", async () => {
     const result = await mock.executeTool("TaskCreate", {
       subject: "Write tests",
       description: "Add unit tests for the parser",
@@ -532,7 +532,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("Write tests");
   });
 
-  it("TaskList works without subagents", async () => {
+  it("TaskList works without an executor adapter", async () => {
     await mock.executeTool("TaskCreate", { subject: "A", description: "desc" });
     await mock.executeTool("TaskCreate", { subject: "B", description: "desc" });
     const result = await mock.executeTool("TaskList", {});
@@ -540,14 +540,14 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("#2");
   });
 
-  it("TaskGet works without subagents", async () => {
+  it("TaskGet works without an executor adapter", async () => {
     await mock.executeTool("TaskCreate", { subject: "Read me", description: "details here" });
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Read me");
     expect(result.content[0].text).toContain("details here");
   });
 
-  it("TaskUpdate works without subagents", async () => {
+  it("TaskUpdate works without an executor adapter", async () => {
     await mock.executeTool("TaskCreate", { subject: "Update me", description: "desc" });
     await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
@@ -585,7 +585,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(list.content[0].text).toContain("[in_progress/claimed]");
   });
 
-  it("TaskExecute gracefully refuses without subagents", async () => {
+  it("TaskExecute explains the unregistered hook", async () => {
     await mock.executeTool("TaskCreate", {
       subject: "Agent task",
       description: "desc",
@@ -593,20 +593,19 @@ describe("Standalone operation (no subagents extension)", () => {
     });
     const result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     const text = result.content[0].text;
-    expect(text).toContain("Subagent execution is currently unavailable");
-    // Offers the plain Agent tool as a fallback, with the tracking caveat.
-    expect(text).toContain("Agent-tool spawns");
-    expect(text).toContain("won't track them");
+    expect(text).toContain("No task-executor adapter is registered");
+    expect(text).toContain("Agent tool directly");
+    expect(text).toContain("update task state manually");
   });
 
-  it("subagents lifecycle events are silently ignored without mapped agents", () => {
-    // These should not throw even though no subagents extension is loaded
-    mock.emitEvent("subagents:completed", { id: "ghost-agent", result: "done" });
-    mock.emitEvent("subagents:failed", { id: "ghost-agent", error: "boom", status: "error" });
+  it("task-executor lifecycle events are silently ignored without mapped agents", () => {
+    // These should not throw without a registered executor adapter
+    mock.emitEvent("task-executor:completed", { id: "ghost-agent", result: "done" });
+    mock.emitEvent("task-executor:failed", { id: "ghost-agent", error: "boom", status: "error" });
     // No crash = pass
   });
 
-  it("task dependencies work without subagents", async () => {
+  it("task dependencies work without an executor adapter", async () => {
     await mock.executeTool("TaskCreate", { subject: "First", description: "desc" });
     await mock.executeTool("TaskCreate", { subject: "Second", description: "desc" });
     await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
@@ -630,7 +629,7 @@ describe("RPC protocol correctness", () => {
     initExtension(mock.pi as any);
 
     // Find the ping emit
-    const pingEmit = emitted.find(e => e.channel === "subagents:rpc:ping");
+    const pingEmit = emitted.find(e => e.channel === "task-executor:rpc:ping");
     expect(pingEmit).toBeDefined();
     const pingData = pingEmit!.data as { requestId: string };
     expect(pingData.requestId).toBeDefined();
@@ -639,7 +638,7 @@ describe("RPC protocol correctness", () => {
 
   it("spawn reply cleans up listener and timer on success", async () => {
     const mock = mockPi();
-    const rpc = installSubagentsMock(mock.pi);
+    const rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
 
     await mock.executeTool("TaskCreate", {
@@ -666,8 +665,8 @@ describe("RPC protocol correctness", () => {
 
   it("spawn RPC rejects on timeout when no responder exists", async () => {
     const mock = mockPi();
-    // Install ping handler (for version check) but no spawn handler
-    installVersionedMock(mock.pi, 2);
+    // Install a compatible ping handler but no spawn handler
+    installVersionedMock(mock.pi, 1);
     initExtension(mock.pi as any);
 
     await mock.executeTool("TaskCreate", {
@@ -687,24 +686,24 @@ describe("RPC protocol correctness", () => {
     vi.useRealTimers();
   });
 
-  it("ready broadcast sets subagentsAvailable even after init", async () => {
+  it("a ready broadcast enables an adapter registered after initialization", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    // Initially no subagents
+    // Initially no executor adapter
     await mock.executeTool("TaskCreate", {
       subject: "Test",
       description: "desc",
       agentType: "general-purpose",
     });
     let result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    expect(result.content[0].text).toContain("Subagent execution is currently unavailable");
+    expect(result.content[0].text).toContain("No task-executor adapter is registered");
 
     // Reset task status
     await mock.executeTool("TaskUpdate", { taskId: "1", status: "pending" });
 
-    // Late subagents extension broadcasts ready
-    const rpc = installSubagentsMock(mock.pi);
+    // A late executor adapter broadcasts readiness
+    const rpc = installTaskExecutorMock(mock.pi);
 
     result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     expect(result.content[0].text).toContain("Launched 1 agent");
@@ -714,7 +713,7 @@ describe("RPC protocol correctness", () => {
 
   it("spawn RPC rejects with error message from server", async () => {
     const mock = mockPi();
-    installSubagentsMock(mock.pi, { spawnError: "No active session" });
+    installTaskExecutorMock(mock.pi, { spawnError: "No active session" });
     initExtension(mock.pi as any);
 
     await mock.executeTool("TaskCreate", {
@@ -729,7 +728,7 @@ describe("RPC protocol correctness", () => {
 
   it("stop RPC resolves on success", async () => {
     const mock = mockPi();
-    const rpc = installSubagentsMock(mock.pi);
+    const rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
 
     // Spawn a task so we have an agent to stop
@@ -750,7 +749,7 @@ describe("RPC protocol correctness", () => {
 
   it("stop RPC returns false on error (agent not found) without throwing", async () => {
     const mock = mockPi();
-    const rpc = installSubagentsMock(mock.pi);
+    const rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
 
     // Create and execute a task, then simulate agent already gone
@@ -775,8 +774,8 @@ describe("RPC protocol correctness", () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    // Mark subagents as available via ready broadcast, but no stop handler installed
-    mock.pi.events.emit("subagents:ready", {});
+    // Mark the task executor as available via ready broadcast, but no stop handler installed
+    mock.pi.events.emit("task-executor:ready", {});
 
     await mock.executeTool("TaskCreate", {
       subject: "Timeout stop",
@@ -802,75 +801,60 @@ describe("RPC protocol correctness", () => {
   });
 });
 
-/** Install a ping-only mock with a specific protocol version (or no version for v1). */
+/** Install a ping-only mock with a specific protocol version (or no version). */
 function installVersionedMock(pi: { events: MockEventBus }, version?: number) {
-  const unsubPing = pi.events.on("subagents:rpc:ping", (data: unknown) => {
+  const unsubPing = pi.events.on("task-executor:rpc:ping", (data: unknown) => {
     const { requestId } = data as { requestId: string };
     if (version !== undefined) {
-      pi.events.emit(`subagents:rpc:ping:reply:${requestId}`, { success: true, data: { version } });
+      pi.events.emit(`task-executor:rpc:ping:reply:${requestId}`, { success: true, data: { version } });
     } else {
-      // v1 handler — no envelope, no version
-      pi.events.emit(`subagents:rpc:ping:reply:${requestId}`, {});
+      pi.events.emit(`task-executor:rpc:ping:reply:${requestId}`, {});
     }
   });
-  pi.events.emit("subagents:ready", {});
+  pi.events.emit("task-executor:ready", {});
   return { unsub() { unsubPing(); } };
 }
 
-describe("Protocol version mismatch", () => {
-  it("matching version — no warning", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi, 2);
-    initExtension(mock.pi as any);
-
-    // No warning on before_agent_start
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).not.toHaveBeenCalled();
-  });
-
-  it("old handler (no version) — warns about pi-subagents", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi);  // no version = v1
-    initExtension(mock.pi as any);
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("pi-subagents is outdated"),
-      "warning",
-    );
-  });
-
-  it("handler ahead (v3) — warns about pi-tasks", async () => {
-    const mock = mockPi();
-    installVersionedMock(mock.pi, 3);
-    initExtension(mock.pi as any);
-
-    const ctx = mockCtx();
-    await mock.fireLifecycle("before_agent_start", {}, ctx);
-    expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("pi-tasks is outdated"),
-      "warning",
-    );
-  });
-
-  it("handler behind (v1) — warns about pi-subagents", async () => {
+describe("Task-executor protocol version", () => {
+  it("accepts the matching hook version", async () => {
     const mock = mockPi();
     installVersionedMock(mock.pi, 1);
     initExtension(mock.pi as any);
 
     const ctx = mockCtx();
     await mock.fireLifecycle("before_agent_start", {}, ctx);
+    expect(ctx.ui.notify).not.toHaveBeenCalled();
+  });
+
+  it("warns when an adapter omits its protocol version", async () => {
+    const mock = mockPi();
+    installVersionedMock(mock.pi);
+    initExtension(mock.pi as any);
+
+    const ctx = mockCtx();
+    await mock.fireLifecycle("before_agent_start", {}, ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("pi-subagents is outdated"),
+      expect.stringContaining("does not advertise a protocol version"),
       "warning",
     );
   });
 
-  it("warning shown only once", async () => {
+  it("warns when the adapter protocol does not match", async () => {
     const mock = mockPi();
-    installVersionedMock(mock.pi);  // v1 — triggers warning
+    installVersionedMock(mock.pi, 2);
+    initExtension(mock.pi as any);
+
+    const ctx = mockCtx();
+    await mock.fireLifecycle("before_agent_start", {}, ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("protocol mismatch"),
+      "warning",
+    );
+  });
+
+  it("shows a compatibility warning only once", async () => {
+    const mock = mockPi();
+    installVersionedMock(mock.pi);
     initExtension(mock.pi as any);
 
     const ctx1 = mockCtx();
@@ -980,7 +964,7 @@ describe("Widget agent ID display", () => {
 
 describe("Cascade data injection (buildTaskPrompt)", () => {
   let mock: ReturnType<typeof mockPi>;
-  let rpc: ReturnType<typeof installSubagentsMock>;
+  let rpc: ReturnType<typeof installTaskExecutorMock>;
 
   beforeEach(async () => {
     // Enable autoCascade via config file in cwd
@@ -991,7 +975,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
     fs.writeFileSync(configPath, JSON.stringify({ autoCascade: true }));
 
     mock = mockPi();
-    rpc = installSubagentsMock(mock.pi);
+    rpc = installTaskExecutorMock(mock.pi);
     initExtension(mock.pi as any);
 
     // Set latestCtx via turn_start lifecycle event
@@ -1021,7 +1005,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
     expect(rpc.spawned).toHaveLength(1);
 
-    mock.emitEvent("subagents:completed", { id: "agent-1", result: "The answer is 42" });
+    mock.emitEvent("task-executor:completed", { id: "agent-1", result: "The answer is 42" });
 
     await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
 
@@ -1047,7 +1031,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     const longResult = "x".repeat(5000);
-    mock.emitEvent("subagents:completed", { id: "agent-1", result: longResult });
+    mock.emitEvent("task-executor:completed", { id: "agent-1", result: longResult });
 
     await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
 
@@ -1072,7 +1056,7 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
 
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
-    mock.emitEvent("subagents:completed", { id: "agent-1" });
+    mock.emitEvent("task-executor:completed", { id: "agent-1" });
 
     await vi.waitFor(() => expect(rpc.spawned).toHaveLength(2), { timeout: 1000 });
 
@@ -1251,9 +1235,9 @@ describe("Execution-state reconciliation", () => {
     const ctx = mockCtx();
     await mock.fireLifecycle("turn_start", {}, ctx);
 
-    // TaskExecute path: spawn RPC is answered by a fake subagents extension.
-    mock.pi.events.on("subagents:rpc:spawn", (data: any) => {
-      mock.emitEvent(`subagents:rpc:spawn:reply:${data.requestId}`, {
+    // TaskExecute path: spawn RPC is answered by a fake task-executor adapter.
+    mock.pi.events.on("task-executor:rpc:spawn", (data: any) => {
+      mock.emitEvent(`task-executor:rpc:spawn:reply:${data.requestId}`, {
         success: true,
         data: { id: "agent-123" },
       });
