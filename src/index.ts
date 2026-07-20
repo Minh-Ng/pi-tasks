@@ -552,28 +552,12 @@ export default function (pi: ExtensionAPI) {
     description: `Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
-## When to Use This Tool
+## Task-List Guidance
 
-Use this tool proactively in these scenarios:
-
-- Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
-- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
-- Plan mode - When using plan mode, create a task list to track the work
-- User explicitly requests todo list - When the user directly asks you to use the todo list
-- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
-- Steering changes work - Reconcile actionable follow-ups, corrections, or tangents with TaskList, then update/create before substantive work. No explicit request is needed.
-- When you start working on a task - Mark it in_progress with executionMode foreground BEFORE beginning active main-thread work
-- After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
-
-## When NOT to Use This Tool
-
-Skip using this tool when:
-- There is only a single, straightforward task
-- The task is trivial and tracking it provides no organizational benefit
-- The task can be completed in less than 3 trivial steps
-- The task is purely conversational or informational
-
-Do not track one trivial action or create one task per message. Update the existing task when its outcome is unchanged; create only distinct deliverables.
+- Create tasks for multi-step work or distinct deliverables; skip trivial or informational requests.
+- Update an existing task when the outcome is unchanged; create a new one only for distinct work.
+- Mark tasks in_progress only while being worked and completed only when fully done.
+- If priorities are unclear, pick any unblocked task and work on it to completion.
 
 ## Task Fields
 
@@ -590,14 +574,12 @@ All tasks are created with status \`pending\`.
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
 - Check TaskList first to avoid creating duplicate tasks
 - Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
-    promptSnippet: "Maintain shared tasks; reconcile steering before substantive work",
+    promptSnippet: "Track meaningful deliverables; finish one task at a time",
     promptGuidelines: [
-      "For multi-step work, TaskCreate the primary outcome before substantive action and keep status current.",
-      "Treat steering/corrections/follow-ups/tangents as checkpoints: TaskList, then update the same outcome or create distinct actionable work. No explicit tracking request is needed.",
-      "A steer may run now or be queued while current work finishes; choose the safer flow unless it is urgent or invalidates current work.",
-      "Do not task quick questions or create one task per message. Before final, TaskList and resume required runnable work in this run; stop only if done, blocked, truly backgrounded, or user-paused/cancelled.",
-      "Tasks are shared across agents using the same session/list; pi-tasks owns TaskExecute agent lifecycle.",
-      "Use foreground only for active main-thread work, background only for real processes/agents, and complete only finished work.",
+      "Create tasks for multi-step work or distinct deliverables; skip trivial or informational requests.",
+      "Update an existing task when the outcome is unchanged; create a new one only for distinct work.",
+      "Mark tasks in_progress only while being worked and completed only when fully done.",
+      "If priorities are unclear, pick any unblocked task and work on it to completion.",
     ],
     parameters: Type.Object({
       subject: Type.String({ description: "A brief title for the task" }),
@@ -632,7 +614,7 @@ All tasks are created with status \`pending\`.
 - To check overall progress on the project
 - To find tasks that are blocked and need dependencies resolved
 - After completing a task, to check for newly unblocked work or claim the next available task
-- **Prefer working on tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+- When priorities are unclear, pick any task and work on it to completion
 
 ## Output
 

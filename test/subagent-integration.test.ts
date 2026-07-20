@@ -1082,20 +1082,18 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
 });
 
 describe("Task prompting during user steering", () => {
-  it("surfaces steering guidance in the system prompt metadata", () => {
+  it("surfaces concise task-list guidance in the system prompt metadata", () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
     const taskCreate = mock.tools.get("TaskCreate");
-    const guidelines = taskCreate.promptGuidelines.join("\n");
-    expect(taskCreate.promptSnippet).toContain("reconcile steering");
-    expect(guidelines).toContain("steering/corrections/follow-ups/tangents");
-    expect(guidelines).toContain("may run now or be queued");
-    expect(guidelines).toContain("Do not task quick questions");
-    expect(guidelines).toContain("Before final");
-    expect(guidelines).toContain("this run");
-    expect(guidelines).toContain("shared across agents");
-    expect(guidelines.length).toBeLessThan(1000);
+    expect(taskCreate.promptSnippet).toBe("Track meaningful deliverables; finish one task at a time");
+    expect(taskCreate.promptGuidelines).toEqual([
+      "Create tasks for multi-step work or distinct deliverables; skip trivial or informational requests.",
+      "Update an existing task when the outcome is unchanged; create a new one only for distinct work.",
+      "Mark tasks in_progress only while being worked and completed only when fully done.",
+      "If priorities are unclear, pick any unblocked task and work on it to completion.",
+    ]);
   });
 
   it("injects one immediate checkpoint after user input when unfinished tasks exist", async () => {
