@@ -555,9 +555,13 @@ It also helps the user understand the progress of the task and overall progress 
 ## Task-List Guidance
 
 - Create tasks for multi-step work or distinct deliverables; skip trivial or informational requests.
+- Before large, branching, or multi-domain work, decompose it into coherent outcomes that can be owned and verified independently. Do not split trivial linear steps into task-sized overhead.
+- Make delegated tasks self-contained: include the objective, scope boundaries, relevant context and constraints, expected deliverable, and observable acceptance criteria.
+- Use blockedBy only for real prerequisites. Leave independent tasks unblocked, and create an explicit integration or end-to-end verification task when multiple outputs must combine.
+- Never run concurrent write tasks with overlapping scope; partition file/component ownership or serialize the work.
 - Update an existing task when the outcome is unchanged; create a new one only for distinct work.
 - Mark tasks in_progress only while being worked and completed only when fully done.
-- If priorities are unclear, pick any unblocked task and work on it to completion.
+- The coordinator must reconcile delegated outputs and verify the integrated result before declaring the user's goal complete.
 
 ## Task Fields
 
@@ -574,12 +578,14 @@ All tasks are created with status \`pending\`.
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
 - Check TaskList first to avoid creating duplicate tasks
 - Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
-    promptSnippet: "Track meaningful deliverables; finish one task at a time",
+    promptSnippet: "Decompose meaningful work into independently owned, verifiable tasks",
     promptGuidelines: [
-      "Create tasks for multi-step work or distinct deliverables; skip trivial or informational requests.",
-      "Update an existing task when the outcome is unchanged; create a new one only for distinct work.",
-      "Mark tasks in_progress only while being worked and completed only when fully done.",
-      "If priorities are unclear, pick any unblocked task and work on it to completion.",
+      "For large or branching work, create coherent tasks that can be owned and verified independently; do not task trivial linear steps.",
+      "Make delegated tasks self-contained with scope, constraints, deliverables, and observable acceptance criteria.",
+      "Encode only real prerequisites as dependencies; add an integration or end-to-end verification task when outputs must combine.",
+      "Do not run concurrent write tasks with overlapping scope; partition ownership or serialize them.",
+      "Update the same outcome instead of duplicating it, and complete tasks only after their acceptance criteria are verified.",
+      "Reconcile delegated outputs and verify the integrated result before declaring the user's goal complete.",
     ],
     parameters: Type.Object({
       subject: Type.String({ description: "A brief title for the task" }),

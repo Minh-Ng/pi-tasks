@@ -1087,12 +1087,14 @@ describe("Task prompting during user steering", () => {
     initExtension(mock.pi as any);
 
     const taskCreate = mock.tools.get("TaskCreate");
-    expect(taskCreate.promptSnippet).toBe("Track meaningful deliverables; finish one task at a time");
+    expect(taskCreate.promptSnippet).toBe("Decompose meaningful work into independently owned, verifiable tasks");
     expect(taskCreate.promptGuidelines).toEqual([
-      "Create tasks for multi-step work or distinct deliverables; skip trivial or informational requests.",
-      "Update an existing task when the outcome is unchanged; create a new one only for distinct work.",
-      "Mark tasks in_progress only while being worked and completed only when fully done.",
-      "If priorities are unclear, pick any unblocked task and work on it to completion.",
+      "For large or branching work, create coherent tasks that can be owned and verified independently; do not task trivial linear steps.",
+      "Make delegated tasks self-contained with scope, constraints, deliverables, and observable acceptance criteria.",
+      "Encode only real prerequisites as dependencies; add an integration or end-to-end verification task when outputs must combine.",
+      "Do not run concurrent write tasks with overlapping scope; partition ownership or serialize them.",
+      "Update the same outcome instead of duplicating it, and complete tasks only after their acceptance criteria are verified.",
+      "Reconcile delegated outputs and verify the integrated result before declaring the user's goal complete.",
     ]);
   });
 
