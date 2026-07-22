@@ -8,10 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Global task defaults** can be set in `<agent-dir>/tasks-config.json` (`~/.pi/agent/tasks-config.json` by default). Project settings in `<cwd>/.pi/tasks-config.json` override global values key by key, and the settings menu persists only project-level differences.
+- **Global task defaults** can be set in `<agent-dir>/tasks-config.json` (`~/.pi/agent/tasks-config.json` by default). Project settings in `<cwd>/.pi/tasks-config.json` override global values key by key, and the settings menu persists only project-level differences. (#36)
+- **The system-reminder now catches stale `in_progress` tasks.** Previously the reminder could only fire from the `tool_result` hook, so an agent that finished a turn with text only (no tool call) was never nudged and could leave tasks stuck `in_progress`. That case is now detected on `turn_end` and a reminder is scheduled for the next LLM call. (#37)
 
 ### Changed
 - **The auto-cascade setting is easier to find** in `/tasks` → Settings because its label now uses the same "auto-cascade" terminology as the documentation.
+- **System-reminder reshaped after Claude Code's todo reminders** — it is now either an empty-list nudge or a JSON echo of the current task list. The echo is capped at 10 tasks (completed dropped first) to bound its size on large or long-lived lists, and says so when truncated rather than presenting itself as the full list. Also restores the cheap `store.list()` guard on the hot `tool_result` path and stops mutating the shared cadence config. (#37)
+
+### Fixed
+- **Legacy task files no longer crash the host on load.** Task files written before the dependency feature have no `blockedBy`/`blocks`/`metadata` fields; `TaskStore.load()` deserialized them as-is, so unguarded reads (e.g. `task.blockedBy.length` in the widget) threw a `TypeError`. Because the widget renders on a pi-tui timer, that throw was uncaught and killed the whole pi process on the first render after upgrade. Every record is now normalized at the `load()` boundary (`normalizeTask`, with type guards for hand-edited files), and the widget render is wrapped in a `try/catch` returning a safe fallback so a render error can never again escape to the TUI timer. Fixes #33. (#39)
+- **Persisted tasks are rehydrated correctly on reload, and forks get an independent copy.** `session_switch` is never emitted by the SDK, so the `/new` and `/resume` reset logic was dead code and forks silently lost (or leaked writes into) the parent's tasks. All session lifecycle handling is consolidated into `session_start`, keyed on `event.reason`: `new`/`resume`/`fork` reset session-scoped state (store pointer, shown flag, cadence, auto-clear) on the cached closure, while `startup`/`reload` start clean; on `/fork` the parent's tasks are snapshotted and seeded into the new session file so writes no longer leak back. Adds `TaskStore.snapshot()`/`seed()`. (#34)
+- **Task-store writes survive removal of the parent directory** — `acquireLock()` and `save()` now `mkdir -p` the target directory before writing, so a task write after the `.pi/tasks/` directory was deleted mid-session recreates it instead of throwing. (#27)
+- **The task directory is created lazily, on first write** — the `TaskStore` constructor no longer eagerly creates `.pi/tasks/`. A session that never persists a task now leaves no `.pi/tasks/` directory behind. (#38)
 
 ## [0.7.1] - 2026-06-24
 
