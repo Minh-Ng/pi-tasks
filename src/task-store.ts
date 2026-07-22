@@ -293,6 +293,23 @@ export class TaskStore {
     });
   }
 
+  /** Capture full store state — used to carry tasks into a forked session. */
+  snapshot(): TaskStoreData {
+    if (this.filePath) this.load();
+    return { nextId: this.nextId, tasks: Array.from(this.tasks.values()) };
+  }
+
+  /** Seed an empty store from a snapshot. No-op if the store already has tasks,
+   *  so re-pointing to an already-seeded fork file never duplicates. */
+  seed(data: TaskStoreData): void {
+    if (this.tasks.size > 0) return;
+    this.withLock(() => {
+      this.nextId = data.nextId;
+      this.tasks.clear();
+      for (const t of data.tasks) this.tasks.set(t.id, t);
+    });
+  }
+
   /** Delete the backing file (if file-backed and empty). */
   deleteFileIfEmpty(): boolean {
     if (!this.filePath || this.tasks.size > 0) return false;

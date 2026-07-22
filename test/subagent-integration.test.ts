@@ -3,6 +3,9 @@
  * auto-cascade, and widget agent ID display.
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 import { TaskStore } from "../src/task-store.js";
@@ -85,6 +88,136 @@ function mockCtx() {
     },
   };
 }
+
+describe("Session task rehydration", () => {
+  it("renders default session-scoped tasks immediately after reload", async () => {
+    const sessionId = `reload-${process.pid}-${Date.now()}`;
+    const taskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    try {
+      new TaskStore(taskFile).create("Review the rerun", "Inspect final results");
+      delete process.env.PI_TASKS;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      const ctx = {
+        ...mockCtx(),
+        sessionManager: { getSessionId: vi.fn(() => sessionId) },
+      };
+
+      await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
+
+      expect(ctx.sessionManager.getSessionId).toHaveBeenCalledOnce();
+      expect(ctx.ui.setWidget).toHaveBeenCalledWith("tasks", expect.any(Function), {
+        placement: "aboveEditor",
+      });
+    } finally {
+      rmSync(taskFile, { force: true });
+    }
+  });
+
+  it("renders tasks from a PI_TASKS path override after reload", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-tasks-reload-"));
+    const taskFile = join(directory, "tasks.json");
+    try {
+      new TaskStore(taskFile).create("Review the rerun", "Inspect final results");
+      process.env.PI_TASKS = taskFile;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      const ctx = mockCtx();
+
+      await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
+
+      expect(ctx.ui.setWidget).toHaveBeenCalledWith("tasks", expect.any(Function), {
+        placement: "aboveEditor",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("renders persisted tasks after /resume", async () => {
+    const sessionId = `resume-${process.pid}-${Date.now()}`;
+    const taskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    try {
+      new TaskStore(taskFile).create("Resume this", "Pick up where we left off");
+      delete process.env.PI_TASKS;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      const ctx = {
+        ...mockCtx(),
+        sessionManager: { getSessionId: vi.fn(() => sessionId) },
+      };
+
+      await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
+
+      expect(ctx.ui.setWidget).toHaveBeenCalledWith("tasks", expect.any(Function), {
+        placement: "aboveEditor",
+      });
+    } finally {
+      rmSync(taskFile, { force: true });
+    }
+  });
+
+  it("switches the session-scoped store to the new session on /new", async () => {
+    const sessionA = `switch-a-${process.pid}-${Date.now()}`;
+    const sessionB = `switch-b-${process.pid}-${Date.now()}`;
+    const fileA = join(process.cwd(), ".pi", "tasks", `tasks-${sessionA}.json`);
+    const fileB = join(process.cwd(), ".pi", "tasks", `tasks-${sessionB}.json`);
+    try {
+      new TaskStore(fileA).create("Task in A", "desc");
+      new TaskStore(fileB).create("Task in B", "desc");
+      delete process.env.PI_TASKS;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+
+      const ctxA = { ...mockCtx(), sessionManager: { getSessionId: vi.fn(() => sessionA) } };
+      await mock.fireLifecycle("session_start", { reason: "startup" }, ctxA);
+      expect(ctxA.sessionManager.getSessionId).toHaveBeenCalledOnce();
+
+      // /new must reset storeUpgraded and re-point at the new session file —
+      // previously handled by the (never-emitted) session_switch event. Without
+      // that reset, storeUpgraded stays true and getSessionId is never called
+      // again, leaving the store stuck on session A.
+      const ctxB = { ...mockCtx(), sessionManager: { getSessionId: vi.fn(() => sessionB) } };
+      await mock.fireLifecycle("session_start", { reason: "new" }, ctxB);
+      expect(ctxB.sessionManager.getSessionId).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(fileA, { force: true });
+      rmSync(fileB, { force: true });
+    }
+  });
+
+  it("seeds a forked session with an independent copy of the parent's tasks", async () => {
+    const parent = `fork-parent-${process.pid}-${Date.now()}`;
+    const child = `fork-child-${process.pid}-${Date.now()}`;
+    const parentFile = join(process.cwd(), ".pi", "tasks", `tasks-${parent}.json`);
+    const childFile = join(process.cwd(), ".pi", "tasks", `tasks-${child}.json`);
+    try {
+      new TaskStore(parentFile).create("Inherited task", "carry me into the fork");
+      delete process.env.PI_TASKS;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+
+      const ctxP = { ...mockCtx(), sessionManager: { getSessionId: vi.fn(() => parent) } };
+      await mock.fireLifecycle("session_start", { reason: "startup" }, ctxP);
+
+      // /fork re-points to a brand-new (empty) session file. Without seeding, the
+      // fork would silently lose the parent's tasks; with it, the fork gets an
+      // independent copy that does not write back to the parent.
+      const ctxC = { ...mockCtx(), sessionManager: { getSessionId: vi.fn(() => child) } };
+      await mock.fireLifecycle("session_start", { reason: "fork" }, ctxC);
+
+      const forked = new TaskStore(childFile).list();
+      expect(forked.map(t => t.subject)).toEqual(["Inherited task"]);
+
+      // The fork is independent — mutating it must not touch the parent's file.
+      new TaskStore(childFile).create("Fork-only task", "not in parent");
+      expect(new TaskStore(parentFile).list().map(t => t.subject)).toEqual(["Inherited task"]);
+    } finally {
+      rmSync(parentFile, { force: true });
+      rmSync(childFile, { force: true });
+    }
+  });
+});
 
 // ---- Mock subagents extension (RPC responders) ----
 
