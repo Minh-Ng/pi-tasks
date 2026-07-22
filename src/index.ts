@@ -377,22 +377,44 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // Rehydrate before the first turn as well as after /reload. A reload creates a
-  // fresh extension instance, and before_agent_start does not fire until the user
-  // submits another prompt, which would otherwise leave persisted tasks hidden.
+  // session_start replaces the never-emitted session_switch event. Rehydrating
+  // here matters because before_agent_start only fires once the user prompts.
   pi.on("session_start", async (event, ctx) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
-    upgradeStoreIfNeeded(ctx);
-    showPersistedTasks(event.reason === "reload" || event.reason === "resume");
+
+    const reason = event.reason;
+    // new/resume/fork reuse the running extension instance (getExtensions() is
+    // cached), so session-scoped state must be reset. startup/reload re-run the
+    // factory and start clean.
+    const isSwitch = reason === "new" || reason === "resume" || reason === "fork";
+    // A fork branches the conversation, so its tasks carry over as an independent
+    // copy. Snapshot before the store re-points to the new (empty) session file.
+    const forkSeed = reason === "fork" ? store.snapshot() : undefined;
+    if (isSwitch) {
+      storeUpgraded = false;
+      persistedTasksShown = false;
+      resetCadenceState(cadence);
+      autoClear.reset();
+      // Memory mode has no file to switch — clear tasks explicitly on /new.
+      if (reason === "new" && taskScope === "memory") {
+        store.clearAll();
+      }
+    }
+
+    upgradeStoreIfNeeded(ctx); // re-points a session store once storeUpgraded is cleared
+    if (forkSeed?.tasks.length) store.seed(forkSeed); // carry the parent's tasks into the fork
+    // resume/reload/fork keep tasks; startup/new auto-clear an all-completed list.
+    showPersistedTasks(reason === "reload" || reason === "resume" || reason === "fork");
+
     if (pendingWarning) {
       ctx.ui.notify(pendingWarning, "warning");
       pendingWarning = undefined;
     }
   });
 
-  // Keep this fallback for hosts that initialize UI lazily and for the first
-  // agent turn on older pi versions.
+  // Fallback for hosts that init UI lazily. Guarded by persistedTasksShown, so
+  // it never double-renders after session_start.
   pi.on("before_agent_start", async (_event, ctx) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
@@ -402,30 +424,6 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(pendingWarning, "warning");
       pendingWarning = undefined;
     }
-  });
-
-  // session_switch fires on /new (reason: "new") and /resume (reason: "resume").
-  // On /new: reset all session-scoped state so the store switches to the new session file.
-  // On resume: reload persisted tasks from the existing session file.
-  pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
-    latestCtx = ctx;
-    widget.setUICtx(ctx.ui as UICtx);
-
-    const isResume = event?.reason === "resume";
-
-    // Reset session-scoped state for both /new and /resume
-    storeUpgraded = false;
-    persistedTasksShown = false;
-    resetCadenceState(cadence);
-    autoClear.reset();
-
-    // Memory mode has no file-backed store to switch — clear explicitly on /new
-    if (!isResume && taskScope === "memory") {
-      store.clearAll();
-    }
-
-    upgradeStoreIfNeeded(ctx);
-    showPersistedTasks(isResume);
   });
 
   // Keep latestCtx fresh on every tool execution as well.
