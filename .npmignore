@@ -1,5 +1,6 @@
 # Development files
 tsconfig.json
+biome.json
 .vscode/
 .git/
 .gitignore
