@@ -17,6 +17,8 @@ const LOCK_MAX_RETRIES = 100; // 5s max
 
 /** Simple file-based locking. */
 function acquireLock(lockPath: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       // O_EXCL: fail if file exists
@@ -51,6 +53,25 @@ function isProcessRunning(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/**
+ * Fill defaults for tasks persisted by older versions. Task files written
+ * before the blocking feature have no `blockedBy`/`blocks`/`metadata`, so
+ * consumers that read those fields unguarded (e.g. `task.blockedBy.length`)
+ * would throw. Normalizing at the load boundary lets every consumer trust the
+ * shape. Also guards against wrong types in hand-edited files.
+ */
+function normalizeTask(t: Task): Task {
+  const now = Date.now();
+  return {
+    ...t,
+    metadata: t.metadata && typeof t.metadata === "object" && !Array.isArray(t.metadata) ? t.metadata : {},
+    blocks: Array.isArray(t.blocks) ? t.blocks : [],
+    blockedBy: Array.isArray(t.blockedBy) ? t.blockedBy : [],
+    createdAt: typeof t.createdAt === "number" ? t.createdAt : now,
+    updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : now,
+  };
+}
+
 export class TaskStore {
   private filePath: string | undefined;
   private lockPath: string | undefined;
@@ -63,7 +84,8 @@ export class TaskStore {
     if (!listIdOrPath) return;
     const isAbsPath = isAbsolute(listIdOrPath);
     const filePath = isAbsPath ? listIdOrPath : join(TASKS_DIR, `${listIdOrPath}.json`);
-    mkdirSync(dirname(filePath), { recursive: true });
+    // Directory is created lazily on the first write (acquireLock/save both
+    // mkdir it), so a session that never persists a task leaves no .pi/tasks/.
     this.filePath = filePath;
     this.lockPath = filePath + ".lock";
     this.load();
@@ -78,7 +100,7 @@ export class TaskStore {
       this.nextId = data.nextId;
       this.tasks.clear();
       for (const t of data.tasks) {
-        this.tasks.set(t.id, t);
+        this.tasks.set(t.id, normalizeTask(t));
       }
     } catch { /* corrupt file — start fresh */ }
   }
@@ -90,6 +112,7 @@ export class TaskStore {
       nextId: this.nextId,
       tasks: Array.from(this.tasks.values()),
     };
+    mkdirSync(dirname(this.filePath), { recursive: true });
     const tmpPath = this.filePath + ".tmp";
     writeFileSync(tmpPath, JSON.stringify(data, null, 2));
     renameSync(tmpPath, this.filePath);

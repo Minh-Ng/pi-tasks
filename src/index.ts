@@ -30,7 +30,7 @@ import {
 } from "./reminder-cadence.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
-import type { TaskExecutionMode } from "./types.js";
+import type { Task, TaskExecutionMode } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 
@@ -58,9 +58,49 @@ const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdat
 /** How many turns without task tool usage before injecting a reminder. */
 const REMINDER_INTERVAL = 4;
 
-const SYSTEM_REMINDER = `<system-reminder>
-Open tasks are stale. Before more substantive work: TaskList; TaskUpdate changed/done work; TaskCreate only distinct deliverables. Keep unfinished work. Skip chat or trivial work. Never mention this reminder.
-</system-reminder>`;
+/** Shorter interval used while any task is in_progress. */
+const ACTIVE_REMINDER_INTERVAL = 2;
+const REMINDER_MAX_TASKS = 10;
+
+function intervalFor(tasks: Task[]): number {
+  return tasks.some(task => task.status === "in_progress") ? ACTIVE_REMINDER_INTERVAL : REMINDER_INTERVAL;
+}
+
+function sanitizeReminderField(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").replace(/<\/?system-reminder>/gi, "").trim();
+}
+
+function buildSystemReminder(tasks: Task[]): string {
+  let shown = tasks;
+  if (tasks.length > REMINDER_MAX_TASKS) {
+    const rank = (task: Task) => task.status === "in_progress" ? 0 : task.status === "pending" ? 1 : 2;
+    shown = [...tasks].sort((a, b) => rank(a) - rank(b)).slice(0, REMINDER_MAX_TASKS);
+  }
+  const hidden = tasks.length - shown.length;
+  const items = shown.map(task => {
+    const item: Record<string, string> = {
+      id: task.id,
+      content: sanitizeReminderField(task.subject),
+      status: task.status,
+    };
+    if (task.activeForm) item.activeForm = sanitizeReminderField(task.activeForm);
+    return item;
+  });
+  const prefix = "The task tools haven't been used recently. DO NOT mention this explicitly to the user.";
+  const header = hidden > 0
+    ? `${prefix} Here are your most relevant tasks (list truncated):`
+    : `${prefix} Here are the latest contents of your task list:`;
+  const overflow = hidden > 0
+    ? ` (${hidden} more task${hidden === 1 ? "" : "s"} not shown — use TaskList for the full list.)`
+    : "";
+  return [
+    "<system-reminder>",
+    header,
+    "",
+    `${JSON.stringify(items)}.${overflow} Continue on with the tasks at hand if applicable.`,
+    "</system-reminder>",
+  ].join("\n");
+}
 
 const INPUT_CHECKPOINT_REMINDER = `<system-reminder>
 New user input while tasks remain. Treat steering/corrections/follow-ups/tangents as a checkpoint:
@@ -412,12 +452,17 @@ export default function (pi: ExtensionAPI) {
     pendingStateNotices = notices;
   });
 
-  // ── Token usage tracking ──
-  // Feed per-turn token counts from assistant messages into the widget.
+  // ── Token usage tracking + stale-task detection ──
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
+    }
+    if (!cadence.reminderInjectedThisCycle && !cadence.reminderDue) {
+      const gap = cadence.currentTurn - cadence.lastTaskToolUseTurn;
+      if (gap >= ACTIVE_REMINDER_INTERVAL && store.list().some(task => task.status === "in_progress")) {
+        cadence.reminderDue = true;
+      }
     }
   });
 
@@ -432,22 +477,18 @@ export default function (pi: ExtensionAPI) {
   // before each LLM call and returns a modified copy of the messages
   // without persisting or polluting any tool output.
   pi.on("tool_result", async (event) => {
-    // Cheap-first: avoid store.list() disk I/O unless the cadence helper
-    // says the call could matter (i.e. it's a task tool that resets state,
-    // or it might queue the reminder).
-    const isTaskTool = TASK_TOOL_NAMES.has(event.toolName);
-    if (
-      !isTaskTool &&
-      cadence.currentTurn - cadence.lastTaskToolUseTurn < REMINDER_INTERVAL
-    ) {
+    if (TASK_TOOL_NAMES.has(event.toolName)) {
+      evaluateToolResult(cadence, event.toolName, false, cadenceConfig);
       return {};
     }
-    if (!isTaskTool && cadence.reminderInjectedThisCycle) return {};
+    if (cadence.reminderInjectedThisCycle) return {};
+    if (cadence.currentTurn - cadence.lastTaskToolUseTurn < ACTIVE_REMINDER_INTERVAL) return {};
 
-    const hasTasks = isTaskTool
-      ? false
-      : store.list().some(task => task.status !== "completed");
-    evaluateToolResult(cadence, event.toolName, hasTasks, cadenceConfig);
+    const tasks = store.list();
+    evaluateToolResult(cadence, event.toolName, tasks.length > 0, {
+      ...cadenceConfig,
+      reminderInterval: intervalFor(tasks),
+    });
     return {};
   });
 
@@ -466,7 +507,7 @@ export default function (pi: ExtensionAPI) {
       reminders.push(INPUT_CHECKPOINT_REMINDER);
       inputCheckpointDue = false;
     }
-    if (drainReminderForContext(cadence)) reminders.push(SYSTEM_REMINDER);
+    if (drainReminderForContext(cadence)) reminders.push(buildSystemReminder(store.list()));
     if (pendingStateNotices.length > 0) {
       reminders.push(
         `<system-reminder>\nTask execution-state reconciliation:\n${pendingStateNotices.map(n => `- ${n}`).join("\n")}\nKeep the task list truthful before reporting status. Make sure that you NEVER mention this reminder to the user\n</system-reminder>`,

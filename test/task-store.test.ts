@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -494,5 +494,63 @@ describe("TaskStore (absolute path)", () => {
 
     const raw = JSON.parse(readFileSync(absFilePath, "utf-8"));
     expect(raw.tasks).toHaveLength(2);
+  });
+
+  it("recreates the parent directory before later mutations", () => {
+    const parentDir = join(tmpdir(), `pi-tasks-missing-parent-${Date.now()}`);
+    const filePath = join(parentDir, "tasks.json");
+    const store = new TaskStore(filePath);
+    store.create("Task", "Desc");
+
+    rmSync(parentDir, { recursive: true, force: true });
+
+    expect(() => store.clearCompleted()).not.toThrow();
+    expect(existsSync(filePath)).toBe(true);
+
+    rmSync(parentDir, { recursive: true, force: true });
+  });
+
+  it("normalizes legacy task records missing blockedBy/blocks/metadata on load", () => {
+    const dir = join(tmpdir(), `pi-tasks-legacy-${process.pid}-${Date.now()}`);
+    const filePath = join(dir, "tasks.json");
+    mkdirSync(dir, { recursive: true });
+    try {
+      // A task file written before the blocking feature — no blockedBy/blocks/metadata.
+      writeFileSync(filePath, JSON.stringify({
+        nextId: 2,
+        tasks: [{
+          id: "1",
+          subject: "Legacy task",
+          description: "From an older version",
+          status: "pending",
+        }],
+      }));
+
+      const task = new TaskStore(filePath).get("1")!;
+      expect(task.blockedBy).toEqual([]);
+      expect(task.blocks).toEqual([]);
+      expect(task.metadata).toEqual({});
+      expect(task.subject).toBe("Legacy task"); // existing fields preserved
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates the backing directory lazily — not on construction, but on first write", () => {
+    const parentDir = join(tmpdir(), `pi-tasks-lazy-${Date.now()}`);
+    const filePath = join(parentDir, "tasks.json");
+    try {
+      const store = new TaskStore(filePath);
+      // Constructing a store must not create the directory for a session that
+      // never persists a task.
+      expect(existsSync(parentDir)).toBe(false);
+
+      store.create("Task", "Desc");
+      // The first mutation creates it.
+      expect(existsSync(parentDir)).toBe(true);
+      expect(existsSync(filePath)).toBe(true);
+    } finally {
+      rmSync(parentDir, { recursive: true, force: true });
+    }
   });
 });
